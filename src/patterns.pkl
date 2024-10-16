@@ -1,0 +1,586 @@
+module patterns
+
+import "pkl:Project"
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/cloudformation.pkl" as cfn
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/lambda/function.pkl" as lambdafunction
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/patterns/role.pkl" as role
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/route53/recordset.pkl" as recordset
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/route53/hostedzone.pkl" as hostedzone
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/s3/bucket.pkl" as bucket
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/s3/bucketpolicy.pkl" as bucketpolicy
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/cloudfront/distribution.pkl" as distribution
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/cloudfront/originaccesscontrol.pkl" as originaccesscontrol
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/cloudfront/function.pkl" as cloudfrontFunction
+import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/certificatemanager/certificate.pkl" as certificate
+
+
+// todo: must not start with a number?
+const resourceNameClases = "A-Za-z0-9"
+const resourceNameRegex = Regex("[\(resourceNameClases)]+")
+const resourceNameInvalidRegex = Regex("[^\(resourceNameClases)]")
+
+typealias ResourceName = String(matches(resourceNameRegex))
+
+class DomainName {
+  local valid: Regex = Regex(#"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63}(?<!-))*\.[A-Za-z]{2,}$"#)
+
+  name: String(matches(valid))
+  fixed resourceName: ResourceName = name.replaceAll(resourceNameInvalidRegex, "")
+
+  // causes StackOverflow
+  //  fixed apex: DomainName = new DomainName { name = parts.takeLast(2).join(".") }
+  fixed apex: String = name.split(".").takeLast(2).join(".")
+  fixed apexResourceName: ResourceName = apex.replaceAll(resourceNameInvalidRegex, "")
+}
+
+
+class DomainTemplate {
+  resources: Mapping<ResourceName, cfn.Resource>
+  outputs: Mapping<ResourceName, cfn.Output>
+}
+
+//   ["domain"] = new {
+//     Type = "AWS::Route53::RegisteredDomain"
+//     Properties = new Mapping {
+//       ["DomainName"] = "jamesward.me"
+//
+//     }
+//   }
+
+// ["RecordSetAAAA"] = new recordset.RecordSet {
+//   HostedZoneId = cfn.Ref("HostedZone")
+//   Name = domainname
+//   TypeProperty = "AAAA"
+//   AliasTarget {
+//     // The following HosteZoneId is always used for alias records pointing to CF.
+//     HostedZoneId = "Z2FDTNDATAQYW2"
+//     //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
+//     DNSName = cfn.GetAtt("Distribution", "DomainName")
+//     EvaluateTargetHealth = false
+//   }
+// }
+
+// todo: phone constraints
+typealias Phone = String
+
+typealias NonEmptyString = String(!isEmpty)
+
+typealias ContactType = "PERSON"|"COMPANY"|"ASSOCIATION"|"PUBLIC_BODY"|"RESELLER"
+
+typealias CountryCode = "AC"|"AD"|"AE"|"AF"|"AG"|"AI"|"AL"|"AM"|"AN"|"AO"|"AQ"|"AR"|"AS"|"AT"|"AU"|"AW"|"AX"|"AZ"|"BA"|"BB"|"BD"|"BE"|"BF"|"BG"|"BH"|"BI"|"BJ"|"BL"|"BM"|"BN"|"BO"|"BQ"|"BR"|"BS"|"BT"|"BV"|"BW"|"BY"|"BZ"|"CA"|"CC"|"CD"|"CF"|"CG"|"CH"|"CI"|"CK"|"CL"|"CM"|"CN"|"CO"|"CR"|"CU"|"CV"|"CW"|"CX"|"CY"|"CZ"|"DE"|"DJ"|"DK"|"DM"|"DO"|"DZ"|"EC"|"EE"|"EG"|"EH"|"ER"|"ES"|"ET"|"FI"|"FJ"|"FK"|"FM"|"FO"|"FR"|"GA"|"GB"|"GD"|"GE"|"GF"|"GG"|"GH"|"GI"|"GL"|"GM"|"GN"|"GP"|"GQ"|"GR"|"GS"|"GT"|"GU"|"GW"|"GY"|"HK"|"HM"|"HN"|"HR"|"HT"|"HU"|"ID"|"IE"|"IL"|"IM"|"IN"|"IO"|"IQ"|"IR"|"IS"|"IT"|"JE"|"JM"|"JO"|"JP"|"KE"|"KG"|"KH"|"KI"|"KM"|"KN"|"KP"|"KR"|"KW"|"KY"|"KZ"|"LA"|"LB"|"LC"|"LI"|"LK"|"LR"|"LS"|"LT"|"LU"|"LV"|"LY"|"MA"|"MC"|"MD"|"ME"|"MF"|"MG"|"MH"|"MK"|"ML"|"MM"|"MN"|"MO"|"MP"|"MQ"|"MR"|"MS"|"MT"|"MU"|"MV"|"MW"|"MX"|"MY"|"MZ"|"NA"|"NC"|"NE"|"NF"|"NG"|"NI"|"NL"|"NO"|"NP"|"NR"|"NU"|"NZ"|"OM"|"PA"|"PE"|"PF"|"PG"|"PH"|"PK"|"PL"|"PM"|"PN"|"PR"|"PS"|"PT"|"PW"|"PY"|"QA"|"RE"|"RO"|"RS"|"RU"|"RW"|"SA"|"SB"|"SC"|"SD"|"SE"|"SG"|"SH"|"SI"|"SJ"|"SK"|"SL"|"SM"|"SN"|"SO"|"SR"|"SS"|"ST"|"SV"|"SX"|"SY"|"SZ"|"TC"|"TD"|"TF"|"TG"|"TH"|"TJ"|"TK"|"TL"|"TM"|"TN"|"TO"|"TP"|"TR"|"TT"|"TV"|"TW"|"TZ"|"UA"|"UG"|"US"|"UY"|"UZ"|"VA"|"VC"|"VE"|"VG"|"VI"|"VN"|"VU"|"WF"|"WS"|"YE"|"YT"|"ZA"|"ZM"|"ZW"
+
+class Contact {
+  firstName: NonEmptyString
+  lastName: NonEmptyString
+  type: ContactType
+  addressLine1: NonEmptyString
+  city: NonEmptyString
+  state: NonEmptyString
+  countryCode: CountryCode
+  zipCode: UInt32
+  phoneNumber: Phone
+  email: Project.EmailAddress
+}
+
+class Domain {
+  domainName: DomainName
+  contact: Contact
+  records: Listing<String>?
+  transferAuthCode: String?
+
+  fixed resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+    ["\(domainName.apexResourceName)Domain"] = new cfn.Resource {
+      Type = "AWS::CloudFormation::CustomResource"
+      Properties {
+        ["ServiceToken"] = cfn.GetAtt("RegisteredDomainFunction", "Arn")
+        ["ServiceTimeout"] = 10
+        ["DomainName"] = domainName.apex
+        ["Contact"] = contact
+        ["TransferAuthCode"] = transferAuthCode
+      }
+    }
+  }
+}
+
+typealias Type = "A" | "AAAA" | "CNAME"
+
+class DomainRecord {
+  type: Type
+}
+
+
+// function fromName(domainName: String) =
+//   make(new Domain { name = domainName })
+//
+// function make(domain: Domain): DomainTemplate =
+//   new {
+//     resources = new Mapping<ResourceName, cfn.Resource> {
+//       ["\(resourceName)HostedZone"] = new hostedzone.HostedZone {
+//         Name = domain.name
+//       }
+//       ["\(resourceName)RecordSetGroup"] = new recordsetgroup.RecordSetGroup {
+//         HostedZoneId = cfn.Ref("\(resourceName)HostedZone")
+//         RecordSets {
+//           new {
+//             Name = domain.name
+//             Type = domain.type
+//             TTL = domain.ttl.toString()
+//             ResourceRecords = domain.records
+//           }
+//         }
+//       }
+//     }
+//     outputs = new Mapping<ResourceName, cfn.Output> {
+//       ["\(resourceName)NameServers"] = new {
+//         Value = new Mapping {
+//           ["Fn::Join"] = new Listing {
+//             ","
+//             cfn.GetAtt("\(resourceName)HostedZone", "NameServers")
+//           }
+//         }
+//         Export {
+//           Name = cfn.Sub("${AWS::StackName}-NameServers")
+//         }
+//       }
+//     }
+//   }
+
+
+// todo: bug in cfn module
+/*
+  local registeredDomainFunctionRole = (role) {
+    LogicalId = "RegisterdDomainFunctionRole"
+    AssumeService = "lambda.amazonaws.com"
+  }
+*/
+
+hidden const registeredDomainFunctionRole = new role.IamRole {
+  AssumeRolePolicyDocument = new role.PolicyDocument {
+    Statement = new role.Statement {
+      Action = "sts:AssumeRole"
+      Principal {
+        Service = "lambda.amazonaws.com"
+      }
+      Path = null
+    }
+  }
+  ManagedPolicyArns {
+    "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+    "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
+  }
+}
+
+const registerDomainCustomResource: Mapping<ResourceName, cfn.Resource> = new {
+
+  //...registeredDomainFunctionRole.Resources
+  ["RegisterdDomainFunctionRole"] = registeredDomainFunctionRole
+
+  ["RegisteredDomainFunction"] = new lambdafunction.Function {
+    Runtime = "python3.9"
+    Handler = "index.handler"
+    Timeout = 10
+    //Role = cfn.GetAtt(registeredDomainFunctionRole.LogicalId, "Arn")
+    Role = cfn.GetAtt("RegisterdDomainFunctionRole", "Arn")
+    Code {
+      ZipFile = """
+        import json
+        import cfnresponse
+        import boto3
+
+        def handler(event, context):
+
+          def contact():
+            return {
+                'FirstName': event['ResourceProperties']['Contact']['firstName'],
+                'LastName': event['ResourceProperties']['Contact']['lastName'],
+                'ContactType': event['ResourceProperties']['Contact']['type'],
+                'AddressLine1': event['ResourceProperties']['Contact']['addressLine1'],
+                'City': event['ResourceProperties']['Contact']['city'],
+                'State': event['ResourceProperties']['Contact']['state'],
+                'CountryCode': event['ResourceProperties']['Contact']['countryCode'],
+                'ZipCode': event['ResourceProperties']['Contact']['zipCode'],
+                'PhoneNumber': event['ResourceProperties']['Contact']['phoneNumber'],
+                'Email': event['ResourceProperties']['Contact']['email'],
+              }
+
+          client = boto3.client('route53domains')
+
+          try:
+            domainName = event['ResourceProperties']['DomainName']
+
+            if event['RequestType'] == 'Create':
+              transferAuthCode = event['ResourceProperties'].get('TransferAuthCode')
+
+              def attemptRegister():
+                availability = client.check_domain_availability(
+                  DomainName = domainName
+                )
+
+                if availability['Availability'] == 'AVAILABLE':
+                  client.register_domain(
+                    DomainName = domainName,
+                    DurationInYears = 1,
+                    AutoRenew = True,
+                    AdminContact = contact(),
+                    RegistrantContact = contact(),
+                    TechContact = contact(),
+                    PrivacyProtectAdminContact = True,
+                    PrivacyProtectRegistrantContact = True,
+                    PrivacyProtectTechContact = True
+                  )
+                else:
+                  raise Exception(f"Domain unavailable: {availability['Availability']}")
+
+              def attemptTransfer():
+                transferability = client.check_domain_transferability(
+                  DomainName = domainName,
+                  AuthCode = transferAuthCode
+                )
+
+                if transferability['Transferability']['Transferable'] == 'TRANSFERABLE':
+                  client.transfer_domain(
+                    DomainName = domainName,
+                    AuthCode = transferAuthCode,
+                    DurationInYears = 1,
+                    AutoRenew = True,
+                    AdminContact = contact(),
+                    RegistrantContact = contact(),
+                    TechContact = contact(),
+                    PrivacyProtectAdminContact = True,
+                    PrivacyProtectRegistrantContact = True,
+                    PrivacyProtectTechContact = True
+                  )
+                elif transferability['Transferability']['Transferable'] == 'DOMAIN_IN_OWN_ACCOUNT':
+                  return
+                else:
+                  raise Exception(f"Transferability: {transferability['Message']}")
+
+              attemptRegister() if transferAuthCode is None else attemptTransfer()
+              responseData = {}
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, "CustomResourcePhysicalID")
+
+            elif event['RequestType'] == 'Update':
+              client.update_domain_contact(
+                DomainName = domainName,
+                AdminContact = contact(),
+                RegistrantContact = contact(),
+                TechContact = contact()
+              )
+
+              responseData = {}
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, "CustomResourcePhysicalID")
+
+            elif event['RequestType'] == 'Delete':
+              responseData = {}
+              try:
+                client.get_domain_detail(
+                  DomainName = domainName
+                )
+
+                client.delete_domain(
+                  DomainName = domainName
+                )
+
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, "CustomResourcePhysicalID")
+
+              except client.exceptions.InvalidInput:
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, "CustomResourcePhysicalID")
+
+            else:
+              raise Exception(f'Invalid RequestType')
+
+          except KeyError as e:
+            print(f"Event: {event}")
+            print(f"Context: {context}")
+            error_message = f"Expected parameter not set: {str(e)}"
+            responseData = {}
+            cfnresponse.send(event, context, cfnresponse.FAILED, responseData, reason=error_message)
+
+          except Exception as e:
+            print(f"Error: {e}")
+            print(f"Event: {event}")
+            print(f"Context: {context}")
+            error_message = f"An unexpected error occurred: {str(e)}"
+            responseData = {}
+            cfnresponse.send(event, context, cfnresponse.FAILED, responseData, reason=error_message)
+        """
+    }
+  }
+}
+
+class DomainsBuilder {
+
+
+}
+//
+// function Domains(contact: Contact): Listing<String> =
+//   TODO()
+
+function authCode(code: String): (ApexDomainName) -> ApexDomainNameWithAuthCode =
+  (domain: ApexDomainName) -> new ApexDomainNameWithAuthCode {
+    apexDomainName = domain
+    authCode = code
+  }
+
+typealias ApexDomainName = String(matches(Regex(#"^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$"#)))
+class ApexDomainNameWithAuthCode {
+  apexDomainName: ApexDomainName
+  authCode: NonEmptyString
+}
+
+
+
+class Domains {
+  contact: Contact
+  domains: Listing<ApexDomainName | ApexDomainNameWithAuthCode>
+
+  function getDomainName(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): String =
+    new Mapping<Class, String> {
+      [String] = apexDomain as String
+      [ApexDomainNameWithAuthCode] = apexDomain.apexDomainName
+    }[apexDomain.getClass()]
+
+  function apexDomainToDomainResources(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): Mapping<ResourceName, cfn.Resource> =
+    let (_contact = contact)
+      new Domain {
+        domainName {
+          name = getDomainName(apexDomain)
+        }
+        contact = _contact
+        when (apexDomain is ApexDomainNameWithAuthCode) {
+          transferAuthCode = apexDomain.authCode
+        }
+      }.resources
+
+  fixed resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+    ...registerDomainCustomResource
+
+    for (apexDomain in domains) {
+      ...apexDomainToDomainResources(apexDomain)
+    }
+  }
+}
+
+
+
+class URL {
+  protocol: "http" | "https" = "https"
+  domainName: DomainName
+  path: String?
+}
+
+typealias RedirectTarget = URL | String
+typealias RedirectType = "Permanent" | "Temporary"
+
+class Redirect {
+  urlOrAmmed: RedirectTarget
+  type: RedirectType
+}
+
+typealias RedirectMatcher = "/" | "*/" | "/*"
+
+/*
+"""
+function handler(event) {
+var request = event.request;
+var uri = request.uri;
+
+// root redirect
+if (uri == '/') {
+  return {
+    statusCode: 301,
+    statusDescription: 'Moved Permanently',
+    headers: {
+      location: { value: 'https://jamesward.com/presos/' }
+    }
+  }
+}
+// Check whether the URI is missing a file name.
+else if (uri.endsWith('/')) {
+  request.uri += 'index.html';
+}
+
+return request;
+}
+"""
+*/
+
+function redirectTargetToBody(redirectTarget: RedirectTarget, type: RedirectType): String =
+  if (redirectTarget is URL)
+    let (statusCode = if (type == "Permanent") "308" else "307")
+    let (statusDescription = if (type == "Permanent") "Moved Permanently" else "Temporary Redirect")
+    """
+
+    """
+
+function redirectToJS(type: RedirectType, redirect: Redirect): String =
+
+    if (type == "/")
+      """
+      if (uri == '/') {
+        return {
+          statusCode: \(statusCode),
+          statusDescription: '\(statusDescription)',
+          headers: {
+            location: { value: '\(redirect.url)' }
+          }
+        }
+      }
+      """
+    else if (type == "/*")
+      """
+      else
+      if (uri.endsWith('/')) {
+      request.uri += 'index.html';
+      }
+      """
+    }
+
+class WebSite {
+
+  domainName: DomainName
+
+  redirects: Mapping<RedirectType, Redirect>
+
+
+
+  fixed redirector: String? = redirects.toMap().map(redirectToJS)
+
+  fixed bucket = "\(domainName.resourceName)WebsiteBucket"
+
+  fixed resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+    ["\(domainName.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
+      Name = domainName.apex
+    }
+
+    ["\(domainName.resourceName)RecordSetA"] = new recordset.RecordSet {
+      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      Name = domainName.name
+      TypeProperty = "A"
+      AliasTarget {
+        // The following HosteZoneId is always used for alias records pointing to CF.
+        HostedZoneId = "Z2FDTNDATAQYW2"
+        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cfn.GetAtt("\(domainName.resourceName)Distribution", "DomainName")
+        EvaluateTargetHealth = false
+      }
+    }
+
+    ["\(domainName.resourceName)RecordSetAAAA"] = new recordset.RecordSet {
+      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      Name = domainName.name
+      TypeProperty = "AAAA"
+      AliasTarget {
+        // The following HosteZoneId is always used for alias records pointing to CF.
+        HostedZoneId = "Z2FDTNDATAQYW2"
+        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cfn.GetAtt("\(domainName.resourceName)Distribution", "DomainName")
+        EvaluateTargetHealth = false
+      }
+    }
+
+    ["\(domainName.resourceName)Certificate"] = new certificate.Certificate {
+      DomainName = domainName.name
+      ValidationMethod = "DNS"
+      // Adds the validation record to the hostedzone?
+      DomainValidationOptions {
+        new {
+          DomainName = domainName.name
+          HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+        }
+      }
+    }
+
+    [bucket] = new bucket.Bucket {
+      BucketName = domainName.name
+      AccessControl = "Private"
+    }
+
+    ["\(domainName.resourceName)BucketPolicy"] = new bucketpolicy.BucketPolicy {
+      Bucket = cfn.Ref("\(domainName.resourceName)WebsiteBucket")
+      PolicyDocument {
+        Version = "2012-10-17"
+        Statement {
+          new {
+            Action = "s3:GetObject"
+            Principal {
+              Service = "cloudfront.amazonaws.com"
+            }
+            Resource = cfn.Sub("arn:aws:s3:::${\(domainName.resourceName)WebsiteBucket}/*")
+            Effect = "Allow"
+            Condition {
+              StringEquals {
+                `AWS:SourceArn` = cfn.Sub("arn:aws:cloudfront::${AWS::AccountId}:distribution/${\(domainName.resourceName)Distribution.Id}")
+              }
+            }
+          }
+        }
+      }
+    }
+
+    ["\(domainName.resourceName)OriginAccessControl"] = new originaccesscontrol.OriginAccessControl {
+      OriginAccessControlConfig {
+        Name = "\(domainName.resourceName)OriginAccessControl"
+        OriginAccessControlOriginType = "s3"
+        SigningBehavior = "always"
+        SigningProtocol = "sigv4"
+      }
+    }
+
+    // From: https://stackoverflow.com/a/75816672/77409
+    ["\(domainName.resourceName)DistributionFunction"] = new cloudfrontFunction.Function {
+      Name = "\(domainName.resourceName)RedirectDefaultIndexRequest"
+      AutoPublish = true
+      FunctionCode = TODO()
+      FunctionConfig {
+        Comment = "Redirect-Default-Index-Request"
+        Runtime = "cloudfront-js-1.0"
+      }
+    }
+
+    ["\(domainName.resourceName)Distribution"] = new distribution.Distribution {
+      DistributionConfig {
+        Enabled = true
+        DefaultRootObject = "index.html"
+        DefaultCacheBehavior {
+          AllowedMethods {
+            "GET"
+            "HEAD"
+          }
+          Compress = true
+          DefaultTTL = 86400
+          ForwardedValues {
+            QueryString = true
+          }
+          MaxTTL = 31536000
+          ViewerProtocolPolicy = "redirect-to-https"
+          TargetOriginId = "WebOrigin"
+          FunctionAssociations {
+            new {
+              EventType = "viewer-request"
+              FunctionARN = cfn.GetAtt("\(domainName.resourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
+            }
+          }
+        }
+        HttpVersion = "http2"
+        Aliases {
+          domainName.name
+        }
+        ViewerCertificate {
+          AcmCertificateArn = cfn.Ref("\(domainName.resourceName)Certificate")
+          SslSupportMethod = "sni-only"
+        }
+        Origins {
+          new {
+            Id = "WebOrigin"
+            DomainName = cfn.GetAtt("\(domainName.resourceName)WebsiteBucket", "RegionalDomainName")
+            // it seems this must be specified but empty?
+            S3OriginConfig { }
+            OriginAccessControlId = cfn.GetAtt("\(domainName.resourceName)OriginAccessControl", "Id")
+          }
+        }
+      }
+    }
+  }
+}

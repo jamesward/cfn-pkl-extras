@@ -1,0 +1,18 @@
+amends "pkl:Project"
+
+package {
+  name = "cfn-extras"
+  authors {
+    "James Ward <james@jamesward.com>"
+  }
+  version = read?("env:VERSION")?.replaceFirst("\(name)@", "") ?? "0.0.1-SNAPSHOT"
+  baseUri = "package://jamesward.github.com/cfn-extras"
+  packageZipUrl = "https://github.com/jamesward/cfn-extras/releases/download/\(name)@\(version)/\(name)@\(version).zip"
+  sourceCode = "https://github.com/jamesward/cfn-extras"
+  sourceCodeUrlScheme = "\(sourceCode)/blob/\(name)@\(version)%{path}#L%{line}-L%{endLine}"
+  documentation = "https://jamesward.github.io/cfn-extras"
+  license = "Apache-2.0"
+  description = """
+    Pkl Modules for CloudFormation
+  """
+}
