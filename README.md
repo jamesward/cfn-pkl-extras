@@ -1,5 +1,5 @@
 Pkl CloudFormation Extras
 ------------------
 
-[Check out the PklDoc](https://jamesward.github.io/cfn-extras/)
+[Check out the PklDoc](https://jamesward.github.io/cfn-pkl-extras/)
 
