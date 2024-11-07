@@ -24,4 +24,11 @@ pkl {
       }
     }
   }
+  tests {
+    register("testPkl") {
+      sourceModules.add(file("src/patterns_test.pkl"))
+      //junitReportsDir.set(layout.buildDirectory.dir("reports"))
+      //overwrite.set(false)
+    }
+  }
 }

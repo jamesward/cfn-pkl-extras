@@ -1,0 +1,68 @@
+amends "pkl:test"
+
+import "patterns.pkl"
+
+//
+// local permRoot = patterns.redirectToJS(new patterns.PermanentRedirect {
+//   redirectMatcher = "/"
+//   url = "https://jamesward.com"
+// })
+//
+// local permAll = patterns.redirectToJS(new patterns.PermanentRedirect {
+//   redirectMatcher = "/*"
+//   url = "https://jamesward.com"
+// })
+//
+// local hiddenRoot = patterns.redirectToJS(new patterns.HiddenRedirect {
+//   redirectMatcher = "/"
+//   ammed = "index.html"
+// })
+//
+// local hiddenTrailingSlash = patterns.redirectToJS(new patterns.HiddenRedirect {
+//   redirectMatcher = "*/"
+//   ammed = "index.html"
+// })
+//
+// facts {
+//   ["redirectToJS"] {
+//     permRoot ==
+//       """
+//       if (uri == '/') {
+//         return {
+//           statusCode: 301,
+//           statusDescription: 'Moved Permanently',
+//           headers: {
+//             location: { value: 'https://jamesward.com' }
+//           }
+//         }
+//       }
+//       """
+//
+//     permAll ==
+//       """
+//       if (true) {
+//         return {
+//           statusCode: 301,
+//           statusDescription: 'Moved Permanently',
+//           headers: {
+//             location: { value: 'https://jamesward.com' + request.path }
+//           }
+//         }
+//       }
+//       """
+//
+//     hiddenRoot ==
+//       """
+//       if (uri == '/') {
+//         request.uri += 'index.html';
+//       }
+//       """
+//
+//     hiddenTrailingSlash ==
+//       """
+//       if (uri.endsWith('/')) {
+//         request.uri += 'index.html';
+//       }
+//       """
+//   }
+// }

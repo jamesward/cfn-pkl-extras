@@ -1,17 +1,24 @@
 module patterns
 
 import "pkl:Project"
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/cloudformation.pkl" as cfn
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/lambda/function.pkl" as lambdafunction
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/patterns/role.pkl" as role
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/route53/recordset.pkl" as recordset
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/route53/hostedzone.pkl" as hostedzone
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/s3/bucket.pkl" as bucket
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/s3/bucketpolicy.pkl" as bucketpolicy
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/cloudfront/distribution.pkl" as distribution
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/cloudfront/originaccesscontrol.pkl" as originaccesscontrol
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/cloudfront/function.pkl" as cloudfrontFunction
-import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/certificatemanager/certificate.pkl" as certificate
+import "@cfn/cloudformation.pkl" as cfn
+import "@cfn/aws/lambda/function.pkl" as lambdafunction
+// import "@cfn/patterns/role.pkl" as role
+import "@cfn/aws/iam/role.pkl" as role
+import "@cfn/aws/route53/recordset.pkl" as recordset
+import "@cfn/aws/route53/hostedzone.pkl" as hostedzone
+import "@cfn/aws/s3/bucket.pkl" as bucket
+import "@cfn/aws/s3/bucketpolicy.pkl" as bucketpolicy
+import "@cfn/aws/cloudfront/distribution.pkl" as distribution
+import "@cfn/aws/cloudfront/originaccesscontrol.pkl" as originaccesscontrol
+import "@cfn/aws/cloudfront/function.pkl" as cloudfrontFunction
+import "@cfn/aws/certificatemanager/certificate.pkl" as certificate
+// import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/certificatemanager/certificate.pkl" as certificate
+
+
+// todo:
+//  - lifecycle on HostedZoneManager doesn't work for cleaning up HostedZone
+
 
 
 // todo: must not start with a number?
@@ -21,16 +28,20 @@ const resourceNameInvalidRegex = Regex("[^\(resourceNameClases)]")
 
 typealias ResourceName = String(matches(resourceNameRegex))
 
-class DomainName {
-  local valid: Regex = Regex(#"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63}(?<!-))*\.[A-Za-z]{2,}$"#)
+const domainNameRegex = #"(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63}(?<!-))*\.[A-Za-z]{2,}"#
 
-  name: String(matches(valid))
-  fixed resourceName: ResourceName = name.replaceAll(resourceNameInvalidRegex, "")
+const local validDomainNameRegex: Regex = Regex("^\(domainNameRegex)$")
+
+typealias ValidDomainName = String(matches(validDomainNameRegex))
+
+class DomainName {
+  name: ValidDomainName
+  hidden resourceName: ResourceName = name.replaceAll(resourceNameInvalidRegex, "")
 
   // causes StackOverflow
   //  fixed apex: DomainName = new DomainName { name = parts.takeLast(2).join(".") }
-  fixed apex: String = name.split(".").takeLast(2).join(".")
-  fixed apexResourceName: ResourceName = apex.replaceAll(resourceNameInvalidRegex, "")
+  hidden apex: String = name.split(".").takeLast(2).join(".")
+  hidden apexResourceName: ResourceName = apex.replaceAll(resourceNameInvalidRegex, "")
 }
 
 
@@ -60,6 +71,8 @@ class DomainTemplate {
 //   }
 // }
 
+// todo: no union types in java/kotlin code generator
+
 // todo: phone constraints
 typealias Phone = String
 
@@ -85,13 +98,12 @@ class Contact {
 class Domain {
   domainName: DomainName
   contact: Contact
-  records: Listing<String>?
   transferAuthCode: String?
 
-  fixed resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+  hidden resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
     ["\(domainName.apexResourceName)Domain"] = new cfn.Resource {
       Type = "AWS::CloudFormation::CustomResource"
-      Properties {
+      Properties = new Mapping {
         ["ServiceToken"] = cfn.GetAtt("RegisteredDomainFunction", "Arn")
         ["ServiceTimeout"] = 10
         ["DomainName"] = domainName.apex
@@ -102,11 +114,7 @@ class Domain {
   }
 }
 
-typealias Type = "A" | "AAAA" | "CNAME"
-
-class DomainRecord {
-  type: Type
-}
+typealias DomainRecordType = "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "NS" | "SOA" | "SRV" | "PTR" | "CAA" | "DNSKEY" | "DS" | "NAPTR" | "SSHFP" | "TLSA"
 
 
 // function fromName(domainName: String) =
@@ -145,42 +153,153 @@ class DomainRecord {
 //     }
 //   }
 
+// hidden const registeredDomainFunctionRole = new role.Role {
+//   AssumeRolePolicyDocument {
+//     Statement {
+//       Effect = "Allow"
+//       Principal {
+//         Service = "lambda.amazonaws.com"
+//       }
+//       Action = "sts:AssumeRole"
+//     }
+//   }
+//   ManagedPolicyArns {
+//     "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+//     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
+//   }
+// }
 
-// todo: bug in cfn module
-/*
-  local registeredDomainFunctionRole = (role) {
-    LogicalId = "RegisterdDomainFunctionRole"
-    AssumeService = "lambda.amazonaws.com"
-  }
-*/
-
-hidden const registeredDomainFunctionRole = new role.IamRole {
-  AssumeRolePolicyDocument = new role.PolicyDocument {
-    Statement = new role.Statement {
-      Action = "sts:AssumeRole"
+hidden const domainFunctionRole = new role.Role {
+  AssumeRolePolicyDocument {
+    Statement {
+      Effect = "Allow"
       Principal {
         Service = "lambda.amazonaws.com"
       }
-      Path = null
+      Action = "sts:AssumeRole"
     }
   }
   ManagedPolicyArns {
     "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
   }
+  Policies {
+    new {
+      PolicyName = "DomainFunctionRoleHostedZonePolicy"
+      PolicyDocument {
+        Version = "2012-10-17"
+        Statement = new Listing {
+          new {
+            Effect = "Allow"
+            Action = new Listing {
+              "route53:GetHostedZone"
+              "route53:ListResourceRecordSets"
+              "route53:ChangeResourceRecordSets"
+              "route53:DeleteHostedZone"
+              "route53domains:UpdateDomainNameservers"
+            }
+            Resource = cfn.Sub("arn:aws:route53:::hostedzone/*")
+          }
+        }
+      }
+    }
+  }
 }
+
+// todo: ManagedPolicyArns
+// hidden const registeredDomainFunctionRole = new role {
+//   LogicalId = "RegisterdDomainFunctionRole"
+//   AssumeService = "lambda.amazonaws.com"
+//   Permits = new role.Statement {
+//     Action = new Listing<String> {
+//       "logs:CreateLogGroup"
+//       "logs:CreateLogStream"
+//       "logs:PutLogEvents"
+//     }
+//     Resource = cfn.Arn("logs", ":log-group:/aws/lambda/*")
+//   }
+// }
+
+// CleanupHostedZoneFunctionRolePolicy: Resource handler returned message: "The role with name CleanupHostedZoneFunctionRole cannot be found.
+
+// hidden const cleanupHostedZoneFunctionRole = (role) {
+//   LogicalId = "CleanupHostedZoneFunctionRole"
+//   AssumeService = "lambda.amazonaws.com"
+//   Statements = new role.Statement {
+//     Action = new Listing<role.RefString> {
+//       "route53:ListResourceRecordSets"
+//       "route53:ChangeResourceRecordSets"
+//       "route53:DeleteHostedZone"
+//     }
+//     Resource = cfn.Sub("arn:aws:route53:::hostedzone/*")
+//   }
+// }
+
+// hidden const hostedZoneFunctionRole = new role.Role {
+//   AssumeRolePolicyDocument {
+//     Statement {
+//       Effect = "Allow"
+//       Principal {
+//         Service = "lambda.amazonaws.com"
+//       }
+//       Action = "sts:AssumeRole"
+//     }
+//   }
+//
+//   ManagedPolicyArns {
+//     "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+//   }
+//
+//   Policies {
+//     new {
+//       PolicyName = "CleanupHostedZoneFunctionRole"
+//       PolicyDocument {
+//         Version = "2012-10-17"
+//         Statement = new Listing {
+//           new {
+//             Effect = "Allow"
+//             Action = new Listing {
+//               "route53:GetHostedZone"
+//               "route53:ListResourceRecordSets"
+//               "route53:ChangeResourceRecordSets"
+//               "route53:DeleteHostedZone"
+//               "route53domains:UpdateDomainNameservers"
+//             }
+//             Resource = cfn.Sub("arn:aws:route53:::hostedzone/*")
+//           }
+//         }
+//       }
+//     }
+//     new {
+//       PolicyName = "CreateUpdateHostedZoneFunctionRole"
+//       PolicyDocument {
+//         Version = "2012-10-17"
+//         Statement = new Listing {
+//           new {
+//             Effect = "Allow"
+//             Action = new Listing {
+//               "route53:GetHostedZone"
+//               "route53domains:UpdateDomainNameservers"
+//             }
+//             Resource = "*"
+//           }
+//         }
+//       }
+//     }
+//   }
+// }
 
 const registerDomainCustomResource: Mapping<ResourceName, cfn.Resource> = new {
 
-  //...registeredDomainFunctionRole.Resources
-  ["RegisterdDomainFunctionRole"] = registeredDomainFunctionRole
+//   ...registeredDomainFunctionRole.Resources
+  ["DomainFunctionRole"] = domainFunctionRole
 
   ["RegisteredDomainFunction"] = new lambdafunction.Function {
     Runtime = "python3.9"
     Handler = "index.handler"
     Timeout = 10
     //Role = cfn.GetAtt(registeredDomainFunctionRole.LogicalId, "Arn")
-    Role = cfn.GetAtt("RegisterdDomainFunctionRole", "Arn")
+    Role = cfn.GetAtt("DomainFunctionRole", "Arn")
     Code {
       ZipFile = """
         import json
@@ -278,9 +397,10 @@ const registerDomainCustomResource: Mapping<ResourceName, cfn.Resource> = new {
                   DomainName = domainName
                 )
 
-                client.delete_domain(
-                  DomainName = domainName
-                )
+                # How do we handle Delete? What about rollbacks? What about moving from one CFN to another? Maybe a field that confirms we actually want to delete it?
+                # client.delete_domain(
+                #  DomainName = domainName
+                # )
 
                 cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, "CustomResourcePhysicalID")
 
@@ -307,149 +427,445 @@ const registerDomainCustomResource: Mapping<ResourceName, cfn.Resource> = new {
         """
     }
   }
-}
 
-class DomainsBuilder {
+//   ...cleanupHostedZoneFunctionRole.Resources
+//  ["HostedZoneFunctionRole"] = domainFunctionRole
 
+  ["HostedZoneFunction"] = new lambdafunction.Function {
+    Runtime = "python3.9"
+    Handler = "index.handler"
+    Timeout = 10
+//     Role = cfn.Ref("CleanupHostedZoneFunctionRole")
+    Role = cfn.GetAtt("DomainFunctionRole", "Arn")
+//     Role = cfn.Ref(cleanupHostedZoneFunctionRole.LogicalId)
+    Code {
+      ZipFile = """
+        import boto3
+        import cfnresponse
 
-}
-//
-// function Domains(contact: Contact): Listing<String> =
-//   TODO()
+        def handler(event, context):
+          if event['RequestType'] in ['Create', 'Update']:
+            try:
+              route53 = boto3.client('route53')
+              route53domains = boto3.client('route53domains')
 
-function authCode(code: String): (ApexDomainName) -> ApexDomainNameWithAuthCode =
-  (domain: ApexDomainName) -> new ApexDomainNameWithAuthCode {
-    apexDomainName = domain
-    authCode = code
+              hosted_zone = route53.get_hosted_zone(Id=event['ResourceProperties']['HostedZoneId'])
+              name_servers = hosted_zone['DelegationSet']['NameServers']
+
+              route53domains.update_domain_nameservers(
+                DomainName=event['ResourceProperties']['DomainName'],
+                Nameservers=[{'Name': ns} for ns in name_servers]
+              )
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            except Exception as e:
+              print(e)
+              cfnresponse.send(event, context, cfnresponse.FAILED, {})
+          if event['RequestType'] == 'Delete':
+            try:
+              route53 = boto3.client('route53')
+              hosted_zone_id = event['ResourceProperties']['HostedZoneId']
+
+              # Get all record sets
+              record_sets = route53.list_resource_record_sets(HostedZoneId=hosted_zone_id)['ResourceRecordSets']
+
+              # Delete all non-NS and non-SOA records
+              for record in record_sets:
+                if record['Type'] not in ['NS', 'SOA']:
+                  route53.change_resource_record_sets(
+                    HostedZoneId=hosted_zone_id,
+                    ChangeBatch={
+                      'Changes': [{
+                        'Action': 'DELETE',
+                        'ResourceRecordSet': record
+                      }]
+                    }
+                  )
+
+              # Delete the hosted zone
+              route53.delete_hosted_zone(Id=hosted_zone_id)
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            except Exception as e:
+              print(e)
+              cfnresponse.send(event, context, cfnresponse.FAILED, {})
+          else:
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+        """
+    }
   }
+}
+
+// function authCode(code: String): (ApexDomainName) -> ApexDomainNameWithAuthCode =
+//   (domain: ApexDomainName) -> new ApexDomainNameWithAuthCode {
+//     apexDomainName = domain
+//     authCode = code
+//   }
 
 typealias ApexDomainName = String(matches(Regex(#"^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$"#)))
-class ApexDomainNameWithAuthCode {
-  apexDomainName: ApexDomainName
-  authCode: NonEmptyString
+// class ApexDomainNameWithAuthCode {
+//   apexDomainName: ApexDomainName
+//   authCode: NonEmptyString
+// }
+//
+
+class BasicRedirect {
+  to: Uri
+  permanent: Boolean = false
+  aliases: Listing<ValidDomainName>
 }
 
+class DomainRecord {
+  sub: String?
+  type: DomainRecordType
+  ttl: Duration(this >= 30.s)?
+  // todo: value: String | Listing<String>
+  values: Listing<String>(!isEmpty)
+}
 
+class DomainDetails {
+  authCode: String?
+  redirect: BasicRedirect?
+  records: Listing<DomainRecord>
+}
+
+// the reason for the HostedZoneManager is because HostedZone can't be deleted when there are non-NS records associated with it
+// and the Certificate creates an additional CNAME record which prevents deletion
+const function hostedZone(domainName: DomainName): Mapping<ResourceName, cfn.Resource> =
+  new {
+    ["\(domainName.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
+      Name = domainName.apex
+      DeletionPolicy = "Retain"
+    }
+
+    ["\(domainName.apexResourceName)HostedZoneManager"] = new cfn.Resource {
+      Type = "AWS::CloudFormation::CustomResource"
+      Properties = new Mapping {
+        ["ServiceToken"] = cfn.GetAtt("HostedZoneFunction", "Arn")
+        ["DomainName"] = domainName.apex
+        ["HostedZoneId"] = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      }
+    }
+  }
+
+const function apexAndRecordToDomainName(apexDomain: ApexDomainName, domainRecord: DomainRecord): DomainName =
+  let (key = if (domainRecord.sub != null) "\(domainRecord.sub).\(apexDomain)" else apexDomain)
+    new DomainName { name = key }
+
+const function domainsAndRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<DomainName, DomainRecord> =
+  new {
+    for (domainRecord in records) {
+      [apexAndRecordToDomainName(apexDomain, domainRecord)] = domainRecord
+    }
+  }
+
+const function domainRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<ResourceName, cfn.Resource> =
+  new Mapping<ResourceName, cfn.Resource> {
+    for (domainName, domainRecord in domainsAndRecords(apexDomain, records)) {
+      ["\(domainName.resourceName)RecordSet\(domainRecord.type)"] = new recordset.RecordSet {
+        HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+        Name = domainName.name
+        TypeProperty = domainRecord.type
+        TTL = domainRecord.ttl?.toUnit("s")?.value?.toString() ?? "300" // default TTL
+        ResourceRecords = domainRecord.values.toList().map((value) -> if (domainRecord.type == "TXT") "\"\(value)\"" else value).toListing()
+      }
+    }
+  }
 
 class Domains {
   contact: Contact
-  domains: Listing<ApexDomainName | ApexDomainNameWithAuthCode>
+  //domains: Listing<ApexDomainName | ApexDomainNameWithAuthCode>
+  domains: Mapping<ApexDomainName, DomainDetails>
 
-  function getDomainName(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): String =
-    new Mapping<Class, String> {
-      [String] = apexDomain as String
-      [ApexDomainNameWithAuthCode] = apexDomain.apexDomainName
-    }[apexDomain.getClass()]
+//   function getDomainName(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): String =
+//     new Mapping<Class, String> {
+//       [String] = apexDomain as String
+//       [ApexDomainNameWithAuthCode] = apexDomain.apexDomainName
+//     }[apexDomain.getClass()]
 
-  function apexDomainToDomainResources(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): Mapping<ResourceName, cfn.Resource> =
+//   function apexDomainToDomainResources(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): Mapping<ResourceName, cfn.Resource> =
+//     let (_contact = contact)
+//       new Domain {
+//         domainName {
+//           name = getDomainName(apexDomain)
+//         }
+//         contact = _contact
+//         when (apexDomain is ApexDomainNameWithAuthCode) {
+//           transferAuthCode = apexDomain.authCode
+//         }
+//       }.resources
+
+  function apexDomainToDomain(apexDomain: ApexDomainName, domainDetails: DomainDetails): Domain =
     let (_contact = contact)
       new Domain {
         domainName {
-          name = getDomainName(apexDomain)
+          name = apexDomain
         }
         contact = _contact
-        when (apexDomain is ApexDomainNameWithAuthCode) {
-          transferAuthCode = apexDomain.authCode
-        }
-      }.resources
+        transferAuthCode = domainDetails.authCode
+      }
 
-  fixed resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+  function apexDomainToResources(apexDomain: ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cfn.Resource> =
+    if (domainDetails.redirect == null)
+      new {
+        ...apexDomainToDomain(apexDomain, domainDetails).resources
+        when (!domainDetails.records.isEmpty) {
+          ...hostedZone(new DomainName { name = apexDomain })
+          ...domainRecords(apexDomain, domainDetails.records)
+        }
+      }
+    else
+      new {
+        ...apexDomainToDomain(apexDomain, domainDetails).resources
+        ...new WebSiteRedirect {
+          domainName {
+            name = apexDomain
+          }
+          redirect = domainDetails.redirect
+        }.resources
+        when (!domainDetails.records.isEmpty) {
+          ...domainRecords(apexDomain, domainDetails.records)
+        }
+      }
+
+  hidden resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
     ...registerDomainCustomResource
 
-    for (apexDomain in domains) {
-      ...apexDomainToDomainResources(apexDomain)
+    for (apexDomain, domainDetails in domains) {
+      ...apexDomainToResources(apexDomain, domainDetails)
     }
   }
 }
 
 
+// typealias RedirectMatcher = "/" | "/*" | "*/"
 
-class URL {
-  protocol: "http" | "https" = "https"
+// class HiddenRedirect {
+//   redirectMatcher: RedirectMatcher
+//   ammed: String
+// }
+//
+// class PermanentRedirect {
+//   redirectMatcher: RedirectMatcher
+//   url: String(matches(Regex("https://\(domainNameRegex)")))
+// }
+
+const function distributionRecordSets(domainName: DomainName): Mapping<ResourceName, cfn.Resource> =
+  new Mapping<ResourceName, cfn.Resource> {
+    ["\(domainName.resourceName)RecordSetA"] = new recordset.RecordSet {
+      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      Name = domainName.name
+      TypeProperty = "A"
+      AliasTarget {
+        // The following HosteZoneId is always used for alias records pointing to CF.
+        HostedZoneId = "Z2FDTNDATAQYW2"
+        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cfn.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
+        EvaluateTargetHealth = false
+      }
+    }
+
+    ["\(domainName.resourceName)RecordSetAAAA"] = new recordset.RecordSet {
+      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      Name = domainName.name
+      TypeProperty = "AAAA"
+      AliasTarget {
+        // The following HosteZoneId is always used for alias records pointing to CF.
+        HostedZoneId = "Z2FDTNDATAQYW2"
+        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cfn.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
+        EvaluateTargetHealth = false
+      }
+    }
+  }
+
+class WebSiteRedirect {
+
   domainName: DomainName
-  path: String?
-}
+  redirect: BasicRedirect?
 
-typealias RedirectTarget = URL | String
-typealias RedirectType = "Permanent" | "Temporary"
+  hidden statusCode = if (redirect.permanent) 301 else 302
+  hidden statusDescription = if (redirect.permanent) "Moved Permanently" else "Found"
 
-class Redirect {
-  urlOrAmmed: RedirectTarget
-  type: RedirectType
-}
-
-typealias RedirectMatcher = "/" | "*/" | "/*"
-
-/*
-"""
-function handler(event) {
-var request = event.request;
-var uri = request.uri;
-
-// root redirect
-if (uri == '/') {
-  return {
-    statusCode: 301,
-    statusDescription: 'Moved Permanently',
-    headers: {
-      location: { value: 'https://jamesward.com/presos/' }
+  hidden redirector: String = """
+    function handler(event) {
+      return {
+        statusCode: \(statusCode),
+        statusDescription: '\(statusDescription)',
+        headers: {
+          'location': { value: '\(redirect.to)' }
+        }
+      };
     }
-  }
-}
-// Check whether the URI is missing a file name.
-else if (uri.endsWith('/')) {
-  request.uri += 'index.html';
-}
-
-return request;
-}
-"""
-*/
-
-function redirectTargetToBody(redirectTarget: RedirectTarget, type: RedirectType): String =
-  if (redirectTarget is URL)
-    let (statusCode = if (type == "Permanent") "308" else "307")
-    let (statusDescription = if (type == "Permanent") "Moved Permanently" else "Temporary Redirect")
     """
 
-    """
+  hidden resources: Mapping<ResourceName, cfn.Resource> = new {
+    ...hostedZone(domainName)
 
-function redirectToJS(type: RedirectType, redirect: Redirect): String =
+    // apex domain
+    ...distributionRecordSets(domainName)
 
-    if (type == "/")
-      """
-      if (uri == '/') {
-        return {
-          statusCode: \(statusCode),
-          statusDescription: '\(statusDescription)',
-          headers: {
-            location: { value: '\(redirect.url)' }
+    for (alias in redirect.aliases) {
+      ...distributionRecordSets(new DomainName { name = alias })
+    }
+
+    ["\(domainName.resourceName)Certificate"] = new certificate.Certificate {
+      DomainName = domainName.name
+      ValidationMethod = "DNS"
+      // Adds the validation record to the hostedzone
+      DomainValidationOptions {
+        new {
+          DomainName = domainName.name
+          HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+        }
+        for (alias in redirect.aliases) {
+          new {
+            DomainName = alias
+            HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
           }
         }
       }
-      """
-    else if (type == "/*")
-      """
+      SubjectAlternativeNames = redirect.aliases
+    }
+
+    ["\(domainName.resourceName)DistributionFunction"] = new cloudfrontFunction.Function {
+      Name = "\(domainName.resourceName)Redirect"
+      AutoPublish = true
+      FunctionCode = redirector
+      FunctionConfig {
+        Comment = "Redirect-All"
+        Runtime = "cloudfront-js-1.0"
+      }
+    }
+
+    ["\(domainName.resourceName)Distribution"] = new distribution.Distribution {
+      DistributionConfig {
+        Enabled = true
+        DefaultCacheBehavior {
+          ViewerProtocolPolicy = "redirect-to-https"
+          TargetOriginId = "dummy-origin"
+          FunctionAssociations {
+            new {
+              EventType = "viewer-request"
+              FunctionARN = cfn.GetAtt("\(domainName.resourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
+            }
+          }
+          ForwardedValues {
+            QueryString = false
+          }
+        }
+        Origins {
+          new {
+            Id = "dummy-origin"
+            DomainName = domainName.name
+            CustomOriginConfig {
+              OriginProtocolPolicy = "https-only"
+            }
+          }
+        }
+        HttpVersion = "http2"
+        Aliases {
+          domainName.name
+          ...redirect.aliases
+        }
+        ViewerCertificate {
+          AcmCertificateArn = cfn.Ref("\(domainName.resourceName)Certificate")
+          SslSupportMethod = "sni-only"
+        }
+      }
+    }
+  }
+}
+
+
+
+/*
+Data model isn't great. It'd be nice to better model what is valid.
+*/
+// typealias Redirect = HiddenRedirect | PermanentRedirect
+
+// temporary to avoid unions
+class Redirect {
+  root: Boolean = false
+  trailingSlash: Boolean = false
+  everything: Boolean = false
+  ammed: String?
+  url: String(matches(Regex("https://\(domainNameRegex)")))?
+}
+
+
+// todo: some missing cases
+const function redirectToJS(redirect: Redirect): String =
+  if (redirect.ammed != null && redirect.root)
+    """
+    if (uri == '/') {
+      request.uri += '\(redirect.ammed)';
+    }
+    """
+  else if (redirect.ammed != null && redirect.trailingSlash)
+    """
+    if (uri.endsWith('/')) {
+      request.uri += '\(redirect.ammed)';
+    }
+    """
+  else if (redirect.url != null && redirect.root)
+    """
+    if (uri == '/') {
+      return {
+        statusCode: 301,
+        statusDescription: 'Moved Permanently',
+        headers: {
+          location: { value: '\(redirect.url)' }
+        }
+      }
+    }
+    """
+  else if (redirect.url != null && redirect.everything)
+    """
+    if (true) {
+      return {
+        statusCode: 301,
+        statusDescription: 'Moved Permanently',
+        headers: {
+          location: { value: '\(redirect.url)' + request.path }
+        }
+      }
+    }
+    """
+  else
+    throw("Not Implemented")
+
+
+const function redirectsToJS(redirects: Listing<Redirect>): String? =
+  if (redirects.isEmpty)
+    null
+  else
+    let (ifs = redirects.toList().mapIndexed( (i, redirect) ->
+      if (i == 0)
+        redirectToJS(redirect)
       else
-      if (uri.endsWith('/')) {
-      request.uri += 'index.html';
+        "else " + redirectToJS(redirect)
+    ))
+      """
+      function handler(event) {
+        var request = event.request;
+        var uri = request.uri;
+        \(ifs)
+        return request;
       }
       """
-    }
 
 class WebSite {
 
   domainName: DomainName
 
-  redirects: Mapping<RedirectType, Redirect>
+  redirects: Listing<Redirect>
 
+  hidden redirector: String? = redirectsToJS(redirects)
 
+  hidden bucket = "\(domainName.resourceName)WebsiteBucket"
 
-  fixed redirector: String? = redirects.toMap().map(redirectToJS)
-
-  fixed bucket = "\(domainName.resourceName)WebsiteBucket"
-
-  fixed resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+  hidden resources: Mapping<ResourceName, cfn.Resource> = new {
     ["\(domainName.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
       Name = domainName.apex
     }
@@ -528,14 +944,15 @@ class WebSite {
       }
     }
 
-    // From: https://stackoverflow.com/a/75816672/77409
-    ["\(domainName.resourceName)DistributionFunction"] = new cloudfrontFunction.Function {
-      Name = "\(domainName.resourceName)RedirectDefaultIndexRequest"
-      AutoPublish = true
-      FunctionCode = TODO()
-      FunctionConfig {
-        Comment = "Redirect-Default-Index-Request"
-        Runtime = "cloudfront-js-1.0"
+    when (redirector != null) {
+      ["\(domainName.resourceName)DistributionFunction"] = new cloudfrontFunction.Function {
+        Name = "\(domainName.resourceName)RedirectDefaultIndexRequest"
+        AutoPublish = true
+        FunctionCode = redirector
+        FunctionConfig {
+          Comment = "Redirect-Default-Index-Request"
+          Runtime = "cloudfront-js-1.0"
+        }
       }
     }
 
@@ -556,10 +973,13 @@ class WebSite {
           MaxTTL = 31536000
           ViewerProtocolPolicy = "redirect-to-https"
           TargetOriginId = "WebOrigin"
-          FunctionAssociations {
-            new {
-              EventType = "viewer-request"
-              FunctionARN = cfn.GetAtt("\(domainName.resourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
+
+          when (redirector != null) {
+            FunctionAssociations {
+              new {
+                EventType = "viewer-request"
+                FunctionARN = cfn.GetAtt("\(domainName.resourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
+              }
             }
           }
         }
