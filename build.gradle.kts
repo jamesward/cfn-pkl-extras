@@ -20,7 +20,7 @@ pkl {
     pkldocGenerators {
       register("pkldoc") {
         sourceModules =
-          listOf(uri("package://pkg.pkl-lang.org/github.com/jamesward/cfn-extras/$maybeVersion"))
+          listOf(uri("package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/$maybeVersion"))
       }
     }
   }
