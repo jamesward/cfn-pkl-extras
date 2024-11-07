@@ -13,7 +13,7 @@ package {
   documentation = "https://jamesward.github.io/cfn-pkl-extras"
   license = "Apache-2.0"
   description = """
-    Pkl Modules for CloudFormation
+    CloudFormation Pkl Extras
   """
 }
 
