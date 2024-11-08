@@ -33,6 +33,9 @@ pkl {
     register("pkldoc") {
       if (maybeVersion != null) {
         sourceModules = listOf(uri("package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/$maybeVersion"))
+
+        // workaround for: https://github.com/apple/pkl/issues/791
+        transitiveModules.from(file("foo.txt"))
       }
       else {
         moduleCacheDir = fakeModuleCacheDir
@@ -59,10 +62,13 @@ pkl {
 }
 
 val evalPackageUri by tasks.existing(EvalTask::class)
-val pkldoc by tasks.existing(PkldocTask::class) {
-  dependsOn(evalPackageUri)
-  dependsOn(prepareCacheDir)
-  sourceModules.set(evalPackageUri.map { listOf(it.outputs.files.singleFile.toPath().readText()) })
+
+if (maybeVersion == null) {
+  val pkldoc by tasks.existing(PkldocTask::class) {
+    dependsOn(evalPackageUri)
+    dependsOn(prepareCacheDir)
+    sourceModules.set(evalPackageUri.map { listOf(it.outputs.files.singleFile.toPath().readText()) })
+  }
 }
 
 val makePackages by tasks.existing(ProjectPackageTask::class)
