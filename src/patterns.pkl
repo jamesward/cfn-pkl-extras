@@ -98,7 +98,7 @@ class Contact {
 class Domain {
   domainName: DomainName
   contact: Contact
-  transferAuthCode: String?
+  transferAuthCode: (String | Mapping)?
 
   hidden resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
     ["\(domainName.apexResourceName)Domain"] = new cfn.Resource {
@@ -524,7 +524,7 @@ class DomainRecord {
 }
 
 class DomainDetails {
-  authCode: String?
+  authCode: (String | Mapping)?
   redirect: BasicRedirect?
   records: Listing<DomainRecord>
 }
