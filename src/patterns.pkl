@@ -14,7 +14,12 @@ import "@cfn/aws/cloudfront/originaccesscontrol.pkl" as originaccesscontrol
 import "@cfn/aws/cloudfront/function.pkl" as cloudfrontFunction
 import "@cfn/aws/certificatemanager/certificate.pkl" as certificate
 // import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/certificatemanager/certificate.pkl" as certificate
-import "route53.pkl" as route53
+
+
+// todo:
+//  - lifecycle on HostedZoneManager doesn't work for cleaning up HostedZone
+
+
 
 // todo: must not start with a number?
 const resourceNameClases = "A-Za-z0-9"
@@ -23,53 +28,682 @@ const resourceNameInvalidRegex = Regex("[^\(resourceNameClases)]")
 
 typealias ResourceName = String(matches(resourceNameRegex), length < 256)
 
+const domainNameRegex = #"(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63}(?<!-))*\.[A-Za-z]{2,}"#
+
+const local validDomainNameRegex: Regex = Regex("^\(domainNameRegex)$")
+
+typealias ValidDomainName = String(matches(validDomainNameRegex))
+
+class DomainName {
+  name: ValidDomainName
+  hidden resourceName: ResourceName = name.replaceAll(resourceNameInvalidRegex, "")
+
+  // causes StackOverflow
+  //  fixed apex: DomainName = new DomainName { name = parts.takeLast(2).join(".") }
+  hidden apex: String = name.split(".").takeLast(2).join(".")
+  hidden apexResourceName: ResourceName = apex.replaceAll(resourceNameInvalidRegex, "")
+}
+
 
 class DomainTemplate {
   resources: Mapping<ResourceName, cfn.Resource>
   outputs: Mapping<ResourceName, cfn.Output>
 }
 
+//   ["domain"] = new {
+//     Type = "AWS::Route53::RegisteredDomain"
+//     Properties = new Mapping {
+//       ["DomainName"] = "jamesward.me"
+//
+//     }
+//   }
+
+// ["RecordSetAAAA"] = new recordset.RecordSet {
+//   HostedZoneId = cfn.Ref("HostedZone")
+//   Name = domainname
+//   TypeProperty = "AAAA"
+//   AliasTarget {
+//     // The following HosteZoneId is always used for alias records pointing to CF.
+//     HostedZoneId = "Z2FDTNDATAQYW2"
+//     //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
+//     DNSName = cfn.GetAtt("Distribution", "DomainName")
+//     EvaluateTargetHealth = false
+//   }
+// }
+
+// todo: no union types in java/kotlin code generator
+
+// todo: phone constraints
+typealias Phone = String
+
+typealias NonEmptyString = String(!isEmpty)
+
+typealias ContactType = "PERSON"|"COMPANY"|"ASSOCIATION"|"PUBLIC_BODY"|"RESELLER"
+
+typealias CountryCode = "AC"|"AD"|"AE"|"AF"|"AG"|"AI"|"AL"|"AM"|"AN"|"AO"|"AQ"|"AR"|"AS"|"AT"|"AU"|"AW"|"AX"|"AZ"|"BA"|"BB"|"BD"|"BE"|"BF"|"BG"|"BH"|"BI"|"BJ"|"BL"|"BM"|"BN"|"BO"|"BQ"|"BR"|"BS"|"BT"|"BV"|"BW"|"BY"|"BZ"|"CA"|"CC"|"CD"|"CF"|"CG"|"CH"|"CI"|"CK"|"CL"|"CM"|"CN"|"CO"|"CR"|"CU"|"CV"|"CW"|"CX"|"CY"|"CZ"|"DE"|"DJ"|"DK"|"DM"|"DO"|"DZ"|"EC"|"EE"|"EG"|"EH"|"ER"|"ES"|"ET"|"FI"|"FJ"|"FK"|"FM"|"FO"|"FR"|"GA"|"GB"|"GD"|"GE"|"GF"|"GG"|"GH"|"GI"|"GL"|"GM"|"GN"|"GP"|"GQ"|"GR"|"GS"|"GT"|"GU"|"GW"|"GY"|"HK"|"HM"|"HN"|"HR"|"HT"|"HU"|"ID"|"IE"|"IL"|"IM"|"IN"|"IO"|"IQ"|"IR"|"IS"|"IT"|"JE"|"JM"|"JO"|"JP"|"KE"|"KG"|"KH"|"KI"|"KM"|"KN"|"KP"|"KR"|"KW"|"KY"|"KZ"|"LA"|"LB"|"LC"|"LI"|"LK"|"LR"|"LS"|"LT"|"LU"|"LV"|"LY"|"MA"|"MC"|"MD"|"ME"|"MF"|"MG"|"MH"|"MK"|"ML"|"MM"|"MN"|"MO"|"MP"|"MQ"|"MR"|"MS"|"MT"|"MU"|"MV"|"MW"|"MX"|"MY"|"MZ"|"NA"|"NC"|"NE"|"NF"|"NG"|"NI"|"NL"|"NO"|"NP"|"NR"|"NU"|"NZ"|"OM"|"PA"|"PE"|"PF"|"PG"|"PH"|"PK"|"PL"|"PM"|"PN"|"PR"|"PS"|"PT"|"PW"|"PY"|"QA"|"RE"|"RO"|"RS"|"RU"|"RW"|"SA"|"SB"|"SC"|"SD"|"SE"|"SG"|"SH"|"SI"|"SJ"|"SK"|"SL"|"SM"|"SN"|"SO"|"SR"|"SS"|"ST"|"SV"|"SX"|"SY"|"SZ"|"TC"|"TD"|"TF"|"TG"|"TH"|"TJ"|"TK"|"TL"|"TM"|"TN"|"TO"|"TP"|"TR"|"TT"|"TV"|"TW"|"TZ"|"UA"|"UG"|"US"|"UY"|"UZ"|"VA"|"VC"|"VE"|"VG"|"VI"|"VN"|"VU"|"WF"|"WS"|"YE"|"YT"|"ZA"|"ZM"|"ZW"
+
+class Contact {
+  firstName: NonEmptyString
+  lastName: NonEmptyString
+  type: ContactType
+  addressLine1: NonEmptyString
+  city: NonEmptyString
+  state: NonEmptyString
+  countryCode: CountryCode
+  zipCode: UInt32
+  phoneNumber: Phone
+  email: Project.EmailAddress
+}
+
+class Domain {
+  domainName: DomainName
+  contact: Contact
+  transferAuthCode: (String | Mapping)?
+  nameServers: Listing<ValidDomainName>
+  autoRenew: Boolean
+
+  hidden resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+    ["\(domainName.apexResourceName)Domain"] = new cfn.Resource {
+      Type = "AWS::CloudFormation::CustomResource"
+      Properties = new Mapping {
+        ["ServiceToken"] = cfn.GetAtt("RegisteredDomainFunction", "Arn")
+        ["ServiceTimeout"] = 10
+        ["DomainName"] = domainName.apex
+        ["Contact"] = contact
+        ["TransferAuthCode"] = transferAuthCode
+        when (!nameServers.isEmpty) {
+          ["NameServers"] = nameServers
+        }
+        ["AutoRenew"] = autoRenew
+      }
+    }
+  }
+}
+
+typealias DomainRecordType = "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "NS" | "SOA" | "SRV" | "PTR" | "CAA" | "DNSKEY" | "DS" | "NAPTR" | "SSHFP" | "TLSA"
+
+
+// function fromName(domainName: String) =
+//   make(new Domain { name = domainName })
+//
+// function make(domain: Domain): DomainTemplate =
+//   new {
+//     resources = new Mapping<ResourceName, cfn.Resource> {
+//       ["\(resourceName)HostedZone"] = new hostedzone.HostedZone {
+//         Name = domain.name
+//       }
+//       ["\(resourceName)RecordSetGroup"] = new recordsetgroup.RecordSetGroup {
+//         HostedZoneId = cfn.Ref("\(resourceName)HostedZone")
+//         RecordSets {
+//           new {
+//             Name = domain.name
+//             Type = domain.type
+//             TTL = domain.ttl.toString()
+//             ResourceRecords = domain.records
+//           }
+//         }
+//       }
+//     }
+//     outputs = new Mapping<ResourceName, cfn.Output> {
+//       ["\(resourceName)NameServers"] = new {
+//         Value = new Mapping {
+//           ["Fn::Join"] = new Listing {
+//             ","
+//             cfn.GetAtt("\(resourceName)HostedZone", "NameServers")
+//           }
+//         }
+//         Export {
+//           Name = cfn.Sub("${AWS::StackName}-NameServers")
+//         }
+//       }
+//     }
+//   }
+
+// hidden const registeredDomainFunctionRole = new role.Role {
+//   AssumeRolePolicyDocument {
+//     Statement {
+//       Effect = "Allow"
+//       Principal {
+//         Service = "lambda.amazonaws.com"
+//       }
+//       Action = "sts:AssumeRole"
+//     }
+//   }
+//   ManagedPolicyArns {
+//     "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+//     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
+//   }
+// }
+
+hidden const domainFunctionRole = new role.Role {
+  AssumeRolePolicyDocument {
+    Statement {
+      Effect = "Allow"
+      Principal {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }
+  }
+  ManagedPolicyArns {
+    "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+    "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
+  }
+  Policies {
+    new {
+      PolicyName = "DomainFunctionRoleHostedZonePolicy"
+      PolicyDocument {
+        Version = "2012-10-17"
+        Statement = new Listing {
+          new {
+            Effect = "Allow"
+            Action = new Listing {
+              "route53:GetHostedZone"
+              "route53:ListResourceRecordSets"
+              "route53:ChangeResourceRecordSets"
+              "route53:DeleteHostedZone"
+              "route53domains:UpdateDomainNameservers"
+            }
+            Resource = cfn.Sub("arn:aws:route53:::hostedzone/*")
+          }
+        }
+      }
+    }
+  }
+}
+
+// todo: ManagedPolicyArns
+// hidden const registeredDomainFunctionRole = new role {
+//   LogicalId = "RegisterdDomainFunctionRole"
+//   AssumeService = "lambda.amazonaws.com"
+//   Permits = new role.Statement {
+//     Action = new Listing<String> {
+//       "logs:CreateLogGroup"
+//       "logs:CreateLogStream"
+//       "logs:PutLogEvents"
+//     }
+//     Resource = cfn.Arn("logs", ":log-group:/aws/lambda/*")
+//   }
+// }
+
+// CleanupHostedZoneFunctionRolePolicy: Resource handler returned message: "The role with name CleanupHostedZoneFunctionRole cannot be found.
+
+// hidden const cleanupHostedZoneFunctionRole = (role) {
+//   LogicalId = "CleanupHostedZoneFunctionRole"
+//   AssumeService = "lambda.amazonaws.com"
+//   Statements = new role.Statement {
+//     Action = new Listing<role.RefString> {
+//       "route53:ListResourceRecordSets"
+//       "route53:ChangeResourceRecordSets"
+//       "route53:DeleteHostedZone"
+//     }
+//     Resource = cfn.Sub("arn:aws:route53:::hostedzone/*")
+//   }
+// }
+
+// hidden const hostedZoneFunctionRole = new role.Role {
+//   AssumeRolePolicyDocument {
+//     Statement {
+//       Effect = "Allow"
+//       Principal {
+//         Service = "lambda.amazonaws.com"
+//       }
+//       Action = "sts:AssumeRole"
+//     }
+//   }
+//
+//   ManagedPolicyArns {
+//     "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+//   }
+//
+//   Policies {
+//     new {
+//       PolicyName = "CleanupHostedZoneFunctionRole"
+//       PolicyDocument {
+//         Version = "2012-10-17"
+//         Statement = new Listing {
+//           new {
+//             Effect = "Allow"
+//             Action = new Listing {
+//               "route53:GetHostedZone"
+//               "route53:ListResourceRecordSets"
+//               "route53:ChangeResourceRecordSets"
+//               "route53:DeleteHostedZone"
+//               "route53domains:UpdateDomainNameservers"
+//             }
+//             Resource = cfn.Sub("arn:aws:route53:::hostedzone/*")
+//           }
+//         }
+//       }
+//     }
+//     new {
+//       PolicyName = "CreateUpdateHostedZoneFunctionRole"
+//       PolicyDocument {
+//         Version = "2012-10-17"
+//         Statement = new Listing {
+//           new {
+//             Effect = "Allow"
+//             Action = new Listing {
+//               "route53:GetHostedZone"
+//               "route53domains:UpdateDomainNameservers"
+//             }
+//             Resource = "*"
+//           }
+//         }
+//       }
+//     }
+//   }
+// }
+
+const registerDomainCustomResource: Mapping<ResourceName, cfn.Resource> = new {
+
+//   ...registeredDomainFunctionRole.Resources
+  ["DomainFunctionRole"] = domainFunctionRole
+
+  ["RegisteredDomainFunction"] = new lambdafunction.Function {
+    Runtime = "python3.9"
+    Handler = "index.handler"
+    Timeout = 10
+    //Role = cfn.GetAtt(registeredDomainFunctionRole.LogicalId, "Arn")
+    Role = cfn.GetAtt("DomainFunctionRole", "Arn")
+    Code {
+      ZipFile = """
+        import json
+        import cfnresponse
+        import boto3
+
+        def handler(event, context):
+
+          def contact():
+            return {
+                'FirstName': event['ResourceProperties']['Contact']['firstName'],
+                'LastName': event['ResourceProperties']['Contact']['lastName'],
+                'ContactType': event['ResourceProperties']['Contact']['type'],
+                'AddressLine1': event['ResourceProperties']['Contact']['addressLine1'],
+                'City': event['ResourceProperties']['Contact']['city'],
+                'State': event['ResourceProperties']['Contact']['state'],
+                'CountryCode': event['ResourceProperties']['Contact']['countryCode'],
+                'ZipCode': event['ResourceProperties']['Contact']['zipCode'],
+                'PhoneNumber': event['ResourceProperties']['Contact']['phoneNumber'],
+                'Email': event['ResourceProperties']['Contact']['email'],
+              }
+
+          def nameServers():
+            servers = event['ResourceProperties'].get('NameServers', [])
+            return [{'Name': server} for server in servers]
+
+          def autoRenew():
+            return event['ResourceProperties']['AutoRenew']
+
+          client = boto3.client('route53domains')
+
+          try:
+            domain_name = event['ResourceProperties']['DomainName']
+
+            if event['RequestType'] == 'Create':
+              transferAuthCode = event['ResourceProperties'].get('TransferAuthCode')
+
+              def attemptRegister():
+                availability = client.check_domain_availability(
+                  DomainName = domain_name
+                )
+
+                if availability['Availability'] == 'AVAILABLE':
+                  client.register_domain(
+                    DomainName = domain_name,
+                    DurationInYears = 1,
+                    AutoRenew = autoRenew(),
+                    AdminContact = contact(),
+                    RegistrantContact = contact(),
+                    TechContact = contact(),
+                    PrivacyProtectAdminContact = True,
+                    PrivacyProtectRegistrantContact = True,
+                    PrivacyProtectTechContact = True
+                  )
+
+                  if nameServers():
+                    client.update_domain_nameservers(
+                      DomainName = domain_name,
+                      Nameservers = nameServers()
+                    )
+
+                else:
+                  raise Exception(f"Domain unavailable: {availability['Availability']}")
+
+              def attemptTransfer():
+                transferability = client.check_domain_transferability(
+                  DomainName = domain_name,
+                  AuthCode = transferAuthCode
+                )
+
+                print(f"Error: {str(transferability)}")
+
+                if transferability['Transferability']['Transferable'] == 'TRANSFERABLE':
+                  params = {
+                    'DomainName': domain_name,
+                    'AuthCode': transferAuthCode,
+                    'DurationInYears': 1,
+                    'AutoRenew': autoRenew(),
+                    'AdminContact': contact(),
+                    'RegistrantContact': contact(),
+                    'TechContact': contact(),
+                    'PrivacyProtectAdminContact': True,
+                    'PrivacyProtectRegistrantContact': True,
+                    'PrivacyProtectTechContact': True
+                  }
+
+                  if nameServers():
+                    params['Nameservers'] = nameServers()
+
+                  client.transfer_domain(**params)
+                elif transferability['Transferability']['Transferable'] == 'DOMAIN_IN_OWN_ACCOUNT':
+                  return
+                elif transferability['Transferability']['Transferable'] == 'UNTRANSFERABLE':
+                  return
+                else:
+                  raise Exception(f"Transferability: {transferability['Message']}")
+
+              try:
+                attemptRegister() if transferAuthCode is None else attemptTransfer()
+              except client.exceptions.ClientError as e:
+                print(f"Error: {str(e)}")
+
+              responseData = {}
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, domain_name)
+
+            elif event['RequestType'] == 'Update':
+
+              try:
+                domain_details = client.get_domain_detail(
+                  DomainName = domain_name
+                )
+
+                status = domain_details.get('StatusList', [])
+                pending_transfer = any('PENDING_TRANSFER' in s for s in status)
+
+                def contacts_are_different(new_contact, old_contact):
+
+                  print(f"New: {str(new_contact)}")
+                  print(f"Old: {str(old_contact)}")
+
+                  fields_to_compare = [
+                    'FirstName',
+                    'LastName',
+                    'ContactType',
+                    'OrganizationName',
+                    'AddressLine1',
+                    'AddressLine2',
+                    'City',
+                    'State',
+                    'CountryCode',
+                    'ZipCode',
+                    'PhoneNumber',
+                    'Email'
+                  ]
+
+                  for field in fields_to_compare:
+                    if old_contact.get(field) != new_contact.get(field):
+                      return True
+
+                  return False
+
+                if not pending_transfer:
+                  updated_admin_contact = contacts_are_different(contact(), domain_details.get('AdminContact', {}))
+                  updated_registrant_contact = contacts_are_different(contact(), domain_details.get('RegistrantContact', {}))
+                  updated_tech_contact = contacts_are_different(contact(), domain_details.get('TechContact', {}))
+
+                  if updated_admin_contact or updated_registrant_contact or updated_tech_contact:
+                    client.update_domain_contact(
+                      DomainName = domain_name,
+                      AdminContact = contact(),
+                      RegistrantContact = contact(),
+                      TechContact = contact()
+                    )
+
+                  # todo: update autoRenew
+
+                  # todo: if updated
+                  if nameServers():
+                    client.update_domain_nameservers(
+                      DomainName = domain_name,
+                      Nameservers = nameServers()
+                    )
+
+                responseData = {}
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, domain_name)
+
+              except client.exceptions.ClientError as e:
+                print(f"Error checking domain transfer status: {str(e)}")
+                responseData = {}
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, domain_name)
+
+            elif event['RequestType'] == 'Delete':
+              responseData = {}
+              try:
+                client.get_domain_detail(
+                  DomainName = domain_name
+                )
+
+                # How do we handle Delete? What about rollbacks? What about moving from one CFN to another? Maybe a field that confirms we actually want to delete it?
+                # client.delete_domain(
+                #  DomainName = domain_name
+                # )
+
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, domain_name)
+
+              except client.exceptions.InvalidInput:
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, domain_name)
+
+            else:
+              raise Exception(f'Invalid RequestType')
+
+          except KeyError as e:
+            print(f"Event: {event}")
+            print(f"Context: {context}")
+            error_message = f"Expected parameter not set: {str(e)}"
+            responseData = {}
+            cfnresponse.send(event, context, cfnresponse.FAILED, responseData, reason=error_message)
+
+          except Exception as e:
+            print(f"Error: {e}")
+            print(f"Event: {event}")
+            print(f"Context: {context}")
+            error_message = f"An unexpected error occurred: {str(e)}"
+            responseData = {}
+            cfnresponse.send(event, context, cfnresponse.FAILED, responseData, reason=error_message)
+        """
+    }
+  }
+
+//   ...cleanupHostedZoneFunctionRole.Resources
+//  ["HostedZoneFunctionRole"] = domainFunctionRole
+
+  ["HostedZoneFunction"] = new lambdafunction.Function {
+    Runtime = "python3.9"
+    Handler = "index.handler"
+    Timeout = 10
+//     Role = cfn.Ref("CleanupHostedZoneFunctionRole")
+    Role = cfn.GetAtt("DomainFunctionRole", "Arn")
+//     Role = cfn.Ref(cleanupHostedZoneFunctionRole.LogicalId)
+    Code {
+      ZipFile = """
+        import boto3
+        import cfnresponse
+
+        def handler(event, context):
+          # TODO: Not sure what we are doing here and why
+          # if event['RequestType'] in ['Create', 'Update']:
+          #  try:
+          #    route53 = boto3.client('route53')
+          #    route53domains = boto3.client('route53domains')
+
+          #    hosted_zone = route53.get_hosted_zone(Id=event['ResourceProperties']['HostedZoneId'])
+          #    name_servers = hosted_zone['DelegationSet']['NameServers']
+
+          #    route53domains.update_domain_nameservers(
+          #      DomainName=event['ResourceProperties']['DomainName'],
+          #      Nameservers=[{'Name': ns} for ns in name_servers]
+          #    )
+
+          #    cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+          #  except Exception as e:
+          #    print(e)
+          #    cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+          if event['RequestType'] == 'Delete':
+            try:
+              route53 = boto3.client('route53')
+              hosted_zone_id = event['ResourceProperties']['HostedZoneId']
+
+              # Get all record sets
+              record_sets = route53.list_resource_record_sets(HostedZoneId=hosted_zone_id)['ResourceRecordSets']
+
+              # Delete all non-NS and non-SOA records
+              for record in record_sets:
+                if record['Type'] not in ['NS', 'SOA']:
+                  route53.change_resource_record_sets(
+                    HostedZoneId=hosted_zone_id,
+                    ChangeBatch={
+                      'Changes': [{
+                        'Action': 'DELETE',
+                        'ResourceRecordSet': record
+                      }]
+                    }
+                  )
+
+              # TODO: Trying to remove the retain
+              # Delete the hosted zone
+              # route53.delete_hosted_zone(Id=hosted_zone_id)
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            except Exception as e:
+              print(e)
+              cfnresponse.send(event, context, cfnresponse.FAILED, {})
+          else:
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+        """
+    }
+  }
+}
+
+// function authCode(code: String): (ApexDomainName) -> ApexDomainNameWithAuthCode =
+//   (domain: ApexDomainName) -> new ApexDomainNameWithAuthCode {
+//     apexDomainName = domain
+//     authCode = code
+//   }
+
+typealias ApexDomainName = String(matches(Regex(#"^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$"#)))
+// class ApexDomainNameWithAuthCode {
+//   apexDomainName: ApexDomainName
+//   authCode: NonEmptyString
+// }
+//
 
 class BasicRedirect {
   sub: String?
   to: Uri
   permanent: Boolean = false
-  aliases: Listing<route53.ValidDomainName>
+  aliases: Listing<ValidDomainName>
 }
 
+class DomainRecord {
+  sub: String?
+  type: DomainRecordType
+  ttl: Duration(this >= 30.s)?
+  // todo: value: String | Listing<String>
+  values: Listing<String>(!isEmpty)
+}
 
 // todo: can't have ghpages and redirect
 class DomainDetails {
   authCode: (String | Mapping)?
   redirect: BasicRedirect?
   ghpages: String?
-  records: Listing<route53.DomainRecord>
-  nameServers: Listing<route53.ValidDomainName>
+  records: Listing<DomainRecord>
+  nameServers: Listing<ValidDomainName>
   autoRenew: Boolean = true
 }
 
+// the reason for the HostedZoneManager is because HostedZone can't be deleted when there are non-NS records associated with it
+// and the Certificate creates an additional CNAME record which prevents deletion
+const function hostedZone(domainName: DomainName): Mapping<ResourceName, cfn.Resource> =
+  new {
+    ["\(domainName.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
+      Name = domainName.apex
+//       DeletionPolicy = "Retain"
+    }
+
+    ["\(domainName.apexResourceName)HostedZoneManager"] = new cfn.Resource {
+      Type = "AWS::CloudFormation::CustomResource"
+      Properties = new Mapping {
+        ["ServiceToken"] = cfn.GetAtt("HostedZoneFunction", "Arn")
+        ["DomainName"] = domainName.apex
+        ["HostedZoneId"] = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      }
+    }
+  }
+
+const function apexAndRecordToDomainName(apexDomain: ApexDomainName, domainRecord: DomainRecord): Pair<DomainName, DomainRecord> =
+  let (key = if (domainRecord.sub != null) "\(domainRecord.sub).\(apexDomain)" else apexDomain)
+    Pair(new DomainName { name = key }, domainRecord)
+
+// const function domainsAndRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<ResourceName, DomainRecord> =
+//   new {
+//     for (domainRecord in records) {
+//       [apexAndRecordToDomainName(apexDomain, domainRecord).resourceName + domainRecord.type] = domainRecord
+//     }
+//   }
+
+const function domainRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<ResourceName, cfn.Resource> =
+  new Mapping<ResourceName, cfn.Resource> {
+    // todo: nicer
+    for (domainNameAndRecord in records.toList().map((domainRecord) -> apexAndRecordToDomainName(apexDomain, domainRecord))) {
+      ["\(domainNameAndRecord.first.resourceName)RecordSet\(domainNameAndRecord.second.type)"] = new recordset.RecordSet {
+        HostedZoneId = cfn.Ref("\(domainNameAndRecord.first.apexResourceName)HostedZone")
+        Name = domainNameAndRecord.first.name
+        TypeProperty = domainNameAndRecord.second.type
+        TTL = domainNameAndRecord.second.ttl?.toUnit("s")?.value?.toString() ?? "300" // default TTL
+        ResourceRecords = domainNameAndRecord.second.values.toList().map((value) -> if (domainNameAndRecord.second.type == "TXT") "\"\(value)\"" else value).toListing()
+      }
+    }
+  }
 
 class Domains {
-  contact: route53.Contact
-  domains: Mapping<route53.ApexDomainName, DomainDetails>
+  contact: Contact
+  //domains: Listing<ApexDomainName | ApexDomainNameWithAuthCode>
+  domains: Mapping<ApexDomainName, DomainDetails>
 
-  function apexDomainToDomain(apexDomain: route53.ApexDomainName, domainDetails: DomainDetails): route53.Domain =
+//   function getDomainName(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): String =
+//     new Mapping<Class, String> {
+//       [String] = apexDomain as String
+//       [ApexDomainNameWithAuthCode] = apexDomain.apexDomainName
+//     }[apexDomain.getClass()]
+
+//   function apexDomainToDomainResources(apexDomain: ApexDomainName | ApexDomainNameWithAuthCode): Mapping<ResourceName, cfn.Resource> =
+//     let (_contact = contact)
+//       new Domain {
+//         domainName {
+//           name = getDomainName(apexDomain)
+//         }
+//         contact = _contact
+//         when (apexDomain is ApexDomainNameWithAuthCode) {
+//           transferAuthCode = apexDomain.authCode
+//         }
+//       }.resources
+
+  function apexDomainToDomain(apexDomain: ApexDomainName, domainDetails: DomainDetails): Domain =
     let (_contact = contact)
-      new route53.Domain {
+      new Domain {
         domainName {
           name = apexDomain
         }
         contact = _contact
         transferAuthCode = domainDetails.authCode
-        // todo: the way we set the nameservers is brittle
-        nameServers = if (domainDetails.nameServers.isEmpty && (domainDetails.redirect != null || domainDetails.ghpages != null || !domainDetails.records.isEmpty))
-            cfn.GetAtt("\(domainName.apexResourceName)HostedZone", "NameServers")
-          else
-            domainDetails.nameServers
+        nameServers = domainDetails.nameServers
         autoRenew = domainDetails.autoRenew
       }
 
-  function apexDomainToResources(apexDomain: route53.ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cfn.Resource> =
+  function apexDomainToResources(apexDomain: ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cfn.Resource> =
     if (domainDetails.redirect != null)
       new {
         ...apexDomainToDomain(apexDomain, domainDetails).resources
@@ -81,14 +715,14 @@ class Domains {
           validationMethod = if (domainDetails.authCode != null) "EMAIL" else "DNS" // transferring domains takes a long time, blocking certification creation
         }.resources
         when (!domainDetails.records.isEmpty) {
-          ...route53.domainRecords(apexDomain, domainDetails.records)
+          ...domainRecords(apexDomain, domainDetails.records)
         }
       }
     else if (domainDetails.ghpages != null)
       new {
         ...apexDomainToDomain(apexDomain, domainDetails).resources
-        ...route53.hostedZone(new route53.DomainName { name = apexDomain })
-        ...route53.domainRecords(apexDomain, new Listing<route53.DomainRecord> {
+        ...hostedZone(new DomainName { name = apexDomain })
+        ...domainRecords(apexDomain, new Listing<DomainRecord> {
           new {
             type = "A"
             values {
@@ -120,16 +754,14 @@ class Domains {
       new {
         ...apexDomainToDomain(apexDomain, domainDetails).resources
         when (!domainDetails.records.isEmpty) {
-          ...route53.hostedZone(new route53.DomainName { name = apexDomain })
-          ...route53.domainRecords(apexDomain, domainDetails.records)
+          ...hostedZone(new DomainName { name = apexDomain })
+          ...domainRecords(apexDomain, domainDetails.records)
         }
       }
 
 
   hidden resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
-    ...route53.domainCustomResource.resources
-
-    ...route53.hostedZoneCustomResource.resources
+    ...registerDomainCustomResource
 
     for (apexDomain, domainDetails in domains) {
       ...apexDomainToResources(apexDomain, domainDetails)
@@ -151,6 +783,7 @@ class Domains {
   }
 }
 
+
 // typealias RedirectMatcher = "/" | "/*" | "*/"
 
 // class HiddenRedirect {
@@ -163,7 +796,7 @@ class Domains {
 //   url: String(matches(Regex("https://\(domainNameRegex)")))
 // }
 
-const function distributionRecordSets(domainName: route53.DomainName): Mapping<ResourceName, cfn.Resource> =
+const function distributionRecordSets(domainName: DomainName): Mapping<ResourceName, cfn.Resource> =
   new Mapping<ResourceName, cfn.Resource> {
     ["\(domainName.resourceName)RecordSetA"] = new recordset.RecordSet {
       HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
@@ -197,7 +830,7 @@ typealias ValidationMethod = "DNS" | "EMAIL"
 // todo: option to preserve path
 class WebSiteRedirect {
 
-  domainName: route53.DomainName
+  domainName: DomainName
   redirect: BasicRedirect?
   validationMethod: ValidationMethod
 
@@ -217,12 +850,12 @@ class WebSiteRedirect {
     """
 
   hidden resources: Mapping<ResourceName, cfn.Resource> = new {
-    ...route53.hostedZone(domainName)
+    ...hostedZone(domainName)
 
     ...distributionRecordSets(domainName)
 
     for (alias in redirect.aliases) {
-      ...distributionRecordSets(new route53.DomainName { name = alias })
+      ...distributionRecordSets(new DomainName { name = alias })
     }
 
     ["\(domainName.apexResourceName)Certificate"] = new certificate.Certificate {
@@ -294,43 +927,12 @@ class WebSiteRedirect {
 }
 
 
-class DNS {
-
-  domains: Mapping<route53.ApexDomainName, Listing<route53.DomainRecord>>
-
-  hidden resources: Mapping<ResourceName, cfn.Resource> =
-    new Mapping<ResourceName, cfn.Resource> {
-      for (apexDomainName, domainValue in domains) {
-        // todo: nicer way to convert ApexDomainName to ResourceName
-        ["\(new route53.DomainName { name = apexDomainName }.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
-          Name = apexDomainName
-        }
-
-        ...route53.domainRecords(apexDomainName, domainValue)
-      }
-    }
-
-  hidden outputs: Mapping<String, cfn.Output> = new {
-    ...resources
-      .toMap()
-      .filter((_, resource) -> resource.Type == "AWS::Route53::HostedZone")
-      .mapValues((resourceName, resource) -> new cfn.Output {
-        Description = "\(resource.Properties["Name"])"
-        Value = cfn.Ref(resourceName)
-        Export {
-          Name = resourceName
-        }
-      })
-  }
-}
-
 
 /*
 Data model isn't great. It'd be nice to better model what is valid.
 */
 // typealias Redirect = HiddenRedirect | PermanentRedirect
 
-/*
 // temporary to avoid unions
 class Redirect {
   root: Boolean = false
@@ -339,10 +941,8 @@ class Redirect {
   ammed: String?
   url: String(matches(Regex("https://\(domainNameRegex)")))?
 }
-*/
 
 
-/*
 // todo: some missing cases
 const function redirectToJS(redirect: Redirect): String =
   if (redirect.ammed != null && redirect.root)
@@ -403,9 +1003,7 @@ const function redirectsToJS(redirects: Listing<Redirect>): String? =
         return request;
       }
       """
-*/
 
-/*
 class WebSite {
 
   domainName: DomainName
@@ -555,4 +1153,3 @@ class WebSite {
     }
   }
 }
-*/
