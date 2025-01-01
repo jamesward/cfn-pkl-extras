@@ -1,19 +1,11 @@
 module `cfn-pkl-extras`.patterns
 
-import "pkl:Project"
 import "@cfn/cloudformation.pkl" as cfn
-import "@cfn/aws/lambda/function.pkl" as lambdafunction
-// import "@cfn/patterns/role.pkl" as role
-import "@cfn/aws/iam/role.pkl" as role
 import "@cfn/aws/route53/recordset.pkl" as recordset
 import "@cfn/aws/route53/hostedzone.pkl" as hostedzone
-import "@cfn/aws/s3/bucket.pkl" as bucket
-import "@cfn/aws/s3/bucketpolicy.pkl" as bucketpolicy
 import "@cfn/aws/cloudfront/distribution.pkl" as distribution
-import "@cfn/aws/cloudfront/originaccesscontrol.pkl" as originaccesscontrol
 import "@cfn/aws/cloudfront/function.pkl" as cloudfrontFunction
 import "@cfn/aws/certificatemanager/certificate.pkl" as certificate
-// import "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.4#/aws/certificatemanager/certificate.pkl" as certificate
 import "route53.pkl" as route53
 
 // todo: must not start with a number?

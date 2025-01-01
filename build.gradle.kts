@@ -4,7 +4,7 @@ import org.pkl.gradle.task.ProjectPackageTask
 import kotlin.io.path.readText
 
 plugins {
-  id("org.pkl-lang") version "0.27.0"
+  id("org.pkl-lang") version "0.27.1"
 }
 
 val maybeVersion = System.getenv("VERSION")

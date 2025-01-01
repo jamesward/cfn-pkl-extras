@@ -1,8 +1,8 @@
-module `cfn-pkl-extras`.customResources
+module `cfn-pkl-extras`.route53
 
 import "pkl:Project"
 import "patterns.pkl" as patterns
-import "customResources.pkl" as customResources
+import "customResources.pkl"
 import "@cfn/cloudformation.pkl" as cfn
 import "@cfn/aws/route53/hostedzone.pkl" as hostedzone
 import "@cfn/aws/route53/recordset.pkl" as recordset
@@ -135,8 +135,6 @@ const function hostedZone(domainName: DomainName): Mapping<patterns.ResourceName
         ["HostedZoneId"] = cfn.Ref("\(domainName.apexResourceName)HostedZone")
       })
   }
-
-
 
 
 const function apexAndRecordToDomainName(apexDomain: ApexDomainName, domainRecord: DomainRecord): Pair<DomainName, DomainRecord> =
