@@ -1,0 +1,159 @@
+module `cfn-pkl-extras`.customResources
+
+import "pkl:Project"
+import "patterns.pkl" as patterns
+import "customResources.pkl" as customResources
+import "@cfn/cloudformation.pkl" as cfn
+import "@cfn/aws/route53/hostedzone.pkl" as hostedzone
+import "@cfn/aws/route53/recordset.pkl" as recordset
+
+const domainNameRegex = #"[_A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63}(?<!-))*\.[A-Za-z]{2,}"#
+
+const local validDomainNameRegex: Regex = Regex("^\(domainNameRegex)$")
+
+typealias ValidDomainName = String(matches(validDomainNameRegex))
+
+
+class DomainName {
+  name: ValidDomainName
+  hidden resourceName: patterns.ResourceName = name.replaceAll(patterns.resourceNameInvalidRegex, "")
+
+  // causes StackOverflow
+  //  fixed apex: DomainName = new DomainName { name = parts.takeLast(2).join(".") }
+  hidden apex: String = name.split(".").takeLast(2).join(".")
+  hidden apexResourceName: patterns.ResourceName = apex.replaceAll(patterns.resourceNameInvalidRegex, "")
+}
+
+// todo: phone constraints
+typealias Phone = String
+
+typealias NonEmptyString = String(!isEmpty)
+
+typealias ContactType = "PERSON"|"COMPANY"|"ASSOCIATION"|"PUBLIC_BODY"|"RESELLER"
+
+typealias CountryCode = "AC"|"AD"|"AE"|"AF"|"AG"|"AI"|"AL"|"AM"|"AN"|"AO"|"AQ"|"AR"|"AS"|"AT"|"AU"|"AW"|"AX"|"AZ"|"BA"|"BB"|"BD"|"BE"|"BF"|"BG"|"BH"|"BI"|"BJ"|"BL"|"BM"|"BN"|"BO"|"BQ"|"BR"|"BS"|"BT"|"BV"|"BW"|"BY"|"BZ"|"CA"|"CC"|"CD"|"CF"|"CG"|"CH"|"CI"|"CK"|"CL"|"CM"|"CN"|"CO"|"CR"|"CU"|"CV"|"CW"|"CX"|"CY"|"CZ"|"DE"|"DJ"|"DK"|"DM"|"DO"|"DZ"|"EC"|"EE"|"EG"|"EH"|"ER"|"ES"|"ET"|"FI"|"FJ"|"FK"|"FM"|"FO"|"FR"|"GA"|"GB"|"GD"|"GE"|"GF"|"GG"|"GH"|"GI"|"GL"|"GM"|"GN"|"GP"|"GQ"|"GR"|"GS"|"GT"|"GU"|"GW"|"GY"|"HK"|"HM"|"HN"|"HR"|"HT"|"HU"|"ID"|"IE"|"IL"|"IM"|"IN"|"IO"|"IQ"|"IR"|"IS"|"IT"|"JE"|"JM"|"JO"|"JP"|"KE"|"KG"|"KH"|"KI"|"KM"|"KN"|"KP"|"KR"|"KW"|"KY"|"KZ"|"LA"|"LB"|"LC"|"LI"|"LK"|"LR"|"LS"|"LT"|"LU"|"LV"|"LY"|"MA"|"MC"|"MD"|"ME"|"MF"|"MG"|"MH"|"MK"|"ML"|"MM"|"MN"|"MO"|"MP"|"MQ"|"MR"|"MS"|"MT"|"MU"|"MV"|"MW"|"MX"|"MY"|"MZ"|"NA"|"NC"|"NE"|"NF"|"NG"|"NI"|"NL"|"NO"|"NP"|"NR"|"NU"|"NZ"|"OM"|"PA"|"PE"|"PF"|"PG"|"PH"|"PK"|"PL"|"PM"|"PN"|"PR"|"PS"|"PT"|"PW"|"PY"|"QA"|"RE"|"RO"|"RS"|"RU"|"RW"|"SA"|"SB"|"SC"|"SD"|"SE"|"SG"|"SH"|"SI"|"SJ"|"SK"|"SL"|"SM"|"SN"|"SO"|"SR"|"SS"|"ST"|"SV"|"SX"|"SY"|"SZ"|"TC"|"TD"|"TF"|"TG"|"TH"|"TJ"|"TK"|"TL"|"TM"|"TN"|"TO"|"TP"|"TR"|"TT"|"TV"|"TW"|"TZ"|"UA"|"UG"|"US"|"UY"|"UZ"|"VA"|"VC"|"VE"|"VG"|"VI"|"VN"|"VU"|"WF"|"WS"|"YE"|"YT"|"ZA"|"ZM"|"ZW"
+
+class Contact {
+  firstName: NonEmptyString
+  lastName: NonEmptyString
+  type: ContactType
+  addressLine1: NonEmptyString
+  city: NonEmptyString
+  state: NonEmptyString
+  countryCode: CountryCode
+  zipCode: UInt32
+  phoneNumber: Phone
+  email: Project.EmailAddress
+}
+
+const domainCustomResource = new customResources.CustomResource {
+  resourceName = "Domain"
+  source = new customResources.Repo {
+    runtime = "python3.9"
+    handler = "index.handler"
+    timeout = 10.s
+    gitHubOrgRepo = "jamesward/cfn-domain-resource"
+    commit = "70e82a96b63a74bb302201e41365707beecaf0ae"
+  }
+  managedPolicyArns {
+    "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
+  }
+}
+
+class Domain {
+  domainName: DomainName
+  contact: Contact
+  transferAuthCode: (String | Mapping)?
+  nameServers: Listing<ValidDomainName> | Mapping
+  autoRenew: Boolean
+
+  hidden resources: Mapping<patterns.ResourceName, cfn.Resource> =
+    new {
+      ["\(domainName.apexResourceName)Domain"] =
+        domainCustomResource.instance(new Mapping {
+          ["DomainName"] = domainName.apex
+          ["Contact"] = contact
+          ["TransferAuthCode"] = transferAuthCode
+          when (!nameServers.isEmpty) {
+            ["NameServers"] = nameServers
+          }
+          ["AutoRenew"] = autoRenew
+        })
+    }
+}
+
+typealias DomainRecordType = "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "NS" | "SOA" | "SRV" | "PTR" | "CAA" | "DNSKEY" | "DS" | "NAPTR" | "SSHFP" | "TLSA"
+
+typealias ApexDomainName = String(matches(Regex(#"^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$"#)))
+
+
+class DomainRecord {
+  sub: String?
+  type: DomainRecordType
+  ttl: Duration(this >= 30.s)?
+  // todo: value: String | Listing<String>
+  values: Listing<String>(!isEmpty)
+}
+
+const hostedZoneCustomResource = new customResources.CustomResource {
+  resourceName = "HostedZoneManager"
+  source = new customResources.Repo {
+    runtime = "python3.9"
+    handler = "index.handler"
+    timeout = 10.s
+    gitHubOrgRepo = "jamesward/cfn-hostedzone-resource"
+    commit = "f90286ec969759d9a8d7062710d8837d825e77ab"
+  }
+  managedPolicyArns {
+    "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
+  }
+  allow {
+    actions {
+      "route53:GetHostedZone"
+      "route53:ListResourceRecordSets"
+      "route53:ChangeResourceRecordSets"
+      "route53:DeleteHostedZone"
+      "route53domains:UpdateDomainNameservers"
+    }
+    resource {
+      cfn.Sub("arn:aws:route53:::hostedzone/*")
+    }
+  }
+}
+
+// the reason for the HostedZoneManager is because HostedZone can't be deleted when there are non-NS records associated with it
+// and the Certificate creates an additional CNAME record which prevents deletion
+const function hostedZone(domainName: DomainName): Mapping<patterns.ResourceName, cfn.Resource> =
+  new {
+    ["\(domainName.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
+      Name = domainName.apex
+    }
+
+    ["\(domainName.apexResourceName)HostedZoneCleanup"] =
+      hostedZoneCustomResource.instance(new Mapping {
+        ["DomainName"] = domainName.apex
+        ["HostedZoneId"] = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      })
+  }
+
+
+
+
+const function apexAndRecordToDomainName(apexDomain: ApexDomainName, domainRecord: DomainRecord): Pair<DomainName, DomainRecord> =
+  let (key = if (domainRecord.sub != null) "\(domainRecord.sub).\(apexDomain)" else apexDomain)
+    Pair(new DomainName { name = key }, domainRecord)
+
+
+const function domainRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<patterns.ResourceName, cfn.Resource> =
+  new Mapping<patterns.ResourceName, cfn.Resource> {
+    // todo: nicer
+    for (domainNameAndRecord in records.toList().map((domainRecord) -> apexAndRecordToDomainName(apexDomain, domainRecord))) {
+      ["\(domainNameAndRecord.first.resourceName)RecordSet\(domainNameAndRecord.second.type)"] = new recordset.RecordSet {
+        HostedZoneId = cfn.Ref("\(domainNameAndRecord.first.apexResourceName)HostedZone")
+        Name = domainNameAndRecord.first.name
+        TypeProperty = domainNameAndRecord.second.type
+        TTL = domainNameAndRecord.second.ttl?.toUnit("s")?.value?.toString() ?? "300" // default TTL
+        ResourceRecords = domainNameAndRecord.second.values.toList().map((value) -> if (domainNameAndRecord.second.type == "TXT") "\"\(value)\"" else value).toListing()
+      }
+    }
+  }

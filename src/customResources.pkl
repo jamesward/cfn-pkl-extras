@@ -1,0 +1,326 @@
+module `cfn-pkl-extras`.customResources
+
+import "patterns.pkl" as patterns
+import "@cfn/cloudformation.pkl" as cfn
+import "@cfn/aws/codebuild/project.pkl" as codebuildproject
+import "@cfn/aws/s3/bucket.pkl" as s3bucket
+import "@cfn/aws/iam/role.pkl" as role
+import "@cfn/aws/lambda/function.pkl" as lambdafunction
+
+abstract class CodeOrRepo {
+  runtime: String
+  handler: String
+  timeout: Duration
+}
+
+class Code extends CodeOrRepo {
+  body: String
+}
+
+class Repo extends CodeOrRepo {
+  gitHubOrgRepo: String(split("/").length == 2)
+  commit: String?
+}
+
+class Allow {
+  actions: Listing<String>
+  resource: Listing
+}
+
+// todo: if the commit on a repo changes, rebuild the function and update all the custom resources that use it
+class CustomResource {
+  resourceName: patterns.ResourceName
+  source: Code | Repo
+  allow: Allow?
+  managedPolicyArns: Listing<String>
+
+  hidden resourcesForCodeOrRepo: Mapping<patterns.ResourceName, cfn.Resource> =
+    new Mapping<patterns.ResourceName, cfn.Resource> {
+      ["\(resourceName)Role"] = new role.Role {
+        AssumeRolePolicyDocument {
+          Statement {
+            Effect = "Allow"
+            Principal {
+              Service = "lambda.amazonaws.com"
+            }
+            Action = "sts:AssumeRole"
+          }
+        }
+        ManagedPolicyArns {
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+          ...managedPolicyArns
+        }
+        when (allow != null) {
+          Policies {
+            new {
+              PolicyName = resourceName
+              PolicyDocument {
+                Version = "2012-10-17"
+                Statement {
+                  Effect = "Allow"
+                  Action = allow.actions
+                  Resource = allow.resource
+                }
+              }
+            }
+          }
+        }
+      }
+
+      ["\(resourceName)Function"] = new lambdafunction.Function {
+        Runtime = source.runtime
+        Handler = source.handler
+        Timeout = source.timeout.toUnit("s").value.toInt()
+        Role = cfn.GetAtt("\(resourceName)Role", "Arn")
+        when (source is Code) {
+          Code {
+            ZipFile = source.body
+          }
+        }
+        when (source is Repo) {
+          DependsOn {
+            "\(resourceName)TriggerBuild"
+//             "\(resourceName)BuildProject"
+          }
+          Code {
+            S3Bucket = cfn.Ref("\(resourceName)BuildBucket")
+            S3Key = "function.zip"
+          }
+        }
+      }
+    }
+
+  function instance(properties: Mapping): cfn.Resource =
+    new cfn.Resource {
+      Type = "AWS::CloudFormation::CustomResource"
+//       DependsOn {
+//         "\(resourceName)Function"
+//       }
+      Properties = new Mapping {
+        ["ServiceTimeout"] = (source.timeout + 1.min).toUnit("s").value.toInt()
+        ["ServiceToken"] = cfn.GetAtt("\(resourceName)Function", "Arn")
+        ...properties
+      }
+    }
+
+  hidden resourcesForCode: Mapping<patterns.ResourceName, cfn.Resource> =
+    resourcesForCodeOrRepo
+
+  hidden resourcesForRepo: Mapping<patterns.ResourceName, cfn.Resource> =
+    let (repo: Repo = source)
+    let (topLevelResourceName = resourceName)
+    let (triggerBuild = new CustomResource {
+      resourceName = "\(topLevelResourceName)TriggerBuild"
+      source = new Code {
+        runtime = "python3.9"
+        handler = "index.handler"
+        timeout = 900.s
+        body = """
+          import boto3
+          import cfnresponse
+          import time
+
+          def handler(event, context):
+            try:
+              if event['RequestType'] in ['Create', 'Update']:
+                codebuild = boto3.client('codebuild')
+
+                build = codebuild.start_build(
+                  projectName=event['ResourceProperties']['ProjectName']
+                )
+
+                build_id = build['build']['id']
+
+                # Poll until complete or timeout
+                while True:
+                  # Check remaining lambda execution time
+                  if context.get_remaining_time_in_millis() < 10000:  # 10 seconds buffer
+                    raise Exception("Lambda timeout approaching before build completion")
+
+                  response = codebuild.batch_get_builds(ids=[build_id])
+                  if not response['builds']:
+                    raise Exception(f"Build {build_id} not found")
+
+                  build_status = response['builds'][0]['buildStatus']
+
+                  if build_status == 'SUCCEEDED':
+                      response_data = {
+                          'BuildId': build_id,
+                          'Status': build_status
+                      }
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                      return
+
+                  elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
+                      # Get the build logs URL and failure details
+                      logs = response['builds'][0].get('logs', {})
+                      log_url = logs.get('deepLink', 'No logs URL available')
+                      phase_details = next((phase for phase in response['builds'][0].get('phases', [])
+                                          if phase.get('phaseStatus') == 'FAILED'), {})
+
+                      error_message = (
+                          f"Build failed with status: {build_status}. "
+                          f"Phase: {phase_details.get('phaseType', 'Unknown')}. "
+                          f"Error: {phase_details.get('statusMessage', 'No error message available')}. "
+                          f"Logs: {log_url}"
+                      )
+
+                      response_data = {
+                          'BuildId': build_id,
+                          'Status': build_status,
+                          'Error': error_message
+                      }
+                      cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+                      return
+
+                  # Still in progress, wait before next check
+                  time.sleep(10)
+
+              elif event['RequestType'] == 'Delete':
+               cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+            except Exception as e:
+              print(f"Error: {str(e)}")
+              cfnresponse.send(event, context, cfnresponse.FAILED, {
+                'Error': str(e)
+              })
+          """
+      }
+      allow = new Allow {
+        actions {
+          "codebuild:StartBuild"
+          "codebuild:BatchGetBuilds"
+        }
+        resource {
+          cfn.GetAtt("\(topLevelResourceName)BuildProject", "Arn")
+        }
+      }
+    })
+    let (cleanupBucket = new CustomResource {
+      resourceName = "\(topLevelResourceName)CleanupBucket"
+      source = new Code {
+        runtime = "python3.9"
+        handler = "index.handler"
+        timeout = 900.s
+        body = """
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+            bucket_name = event['ResourceProperties']['BucketName']
+            s3 = boto3.resource('s3')
+            bucket = s3.Bucket(bucket_name)
+
+            try:
+              if event['RequestType'] == 'Delete':
+                # Delete all objects including versions
+                bucket.object_versions.all().delete()
+                bucket.objects.all().delete()
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            except Exception as e:
+                cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+          """
+      }
+      allow = new Allow {
+        actions {
+          "s3:ListBucket"
+          "s3:ListBucketVersions"
+          "s3:DeleteObject"
+          "s3:DeleteObjectVersion"
+          "s3:GetObjectVersion"
+        }
+        resource {
+          cfn.Sub("${\(topLevelResourceName)BuildBucket.Arn}")
+          cfn.Sub("${\(topLevelResourceName)BuildBucket.Arn}/*")
+        }
+      }
+    })
+
+      new Mapping<patterns.ResourceName, cfn.Resource> {
+        ["\(resourceName)BuildBucket"] = new s3bucket.Bucket {
+
+        }
+
+        ["\(resourceName)BuildProjectRole"] = new role.Role {
+          AssumeRolePolicyDocument {
+            Statement {
+              Effect = "Allow"
+              Principal {
+                Service = "codebuild.amazonaws.com"
+              }
+              Action = "sts:AssumeRole"
+            }
+          }
+          Policies {
+            new {
+              PolicyName = "S3Access"
+              PolicyDocument {
+                Version = "2012-10-17"
+                Statement {
+                  Effect = "Allow"
+                  Action {
+                    "s3:PutObject"
+                    "s3:GetObject"
+                    "s3:GetObjectVersion"
+                  }
+                  Resource = cfn.Sub("${\(resourceName)BuildBucket.Arn}/*")
+                }
+              }
+            }
+            new {
+              PolicyName = "Logs"
+              PolicyDocument {
+                Version = "2012-10-17"
+                Statement {
+                  Effect = "Allow"
+                  Action {
+                    "logs:CreateLogGroup"
+                    "logs:CreateLogStream"
+                    "logs:PutLogEvents"
+                  }
+                  Resource = "*"
+                }
+              }
+            }
+          }
+        }
+
+        ...triggerBuild.resourcesForCode
+
+        [triggerBuild.resourceName] = triggerBuild.instance(new Mapping {
+          ["ProjectName"] = cfn.Ref("\(topLevelResourceName)BuildProject")
+        })
+
+        ...cleanupBucket.resourcesForCode
+
+        [cleanupBucket.resourceName] = cleanupBucket.instance(new Mapping {
+          ["BucketName"] = cfn.Ref("\(topLevelResourceName)BuildBucket")
+        })
+
+        ["\(resourceName)BuildProject"] = new codebuildproject.Project {
+          ServiceRole = cfn.GetAtt("\(resourceName)BuildProjectRole", "Arn")
+          Artifacts {
+            Type = "S3"
+            Location = cfn.Ref("\(resourceName)BuildBucket")
+            Name = "function.zip"
+            Packaging = "ZIP"
+          }
+          Source {
+            Type = "GITHUB"
+            Location = "https://github.com/\(repo.gitHubOrgRepo).git"
+          }
+          SourceVersion = repo.commit
+          Environment {
+            Type = "LINUX_CONTAINER"
+            ComputeType = "BUILD_GENERAL1_SMALL"
+            Image = "aws/codebuild/amazonlinux2-x86_64-standard:4.0"
+          }
+        }
+
+        ...resourcesForCodeOrRepo
+      }
+
+  hidden resources: Mapping<patterns.ResourceName, cfn.Resource> =
+    if (source is Code) resourcesForCode else resourcesForRepo
+}
