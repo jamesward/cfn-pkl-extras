@@ -3,7 +3,7 @@ Pkl CloudFormation Extras
 
 > Convenient abstractions over [cloudformation-pkl](https://github.com/aws-cloudformation/cloudformation-pkl)
 
-[Check out the PklDoc](https://jamesward.github.io/cfn-pkl-extras/)
+[Check out the PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/index.html)
 
 ## Usage
 
@@ -13,16 +13,18 @@ amends "pkl:Project"
 
 dependencies {
   ["cfn-pkl-extras"] {
-    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.0.3"
+    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.0.4"
   }
 }
 ```
 
-## Pattern - Domains
+## High-Level Abstractions
+
+### Pattern - Domains
 
 > Register, transfer, and manage domains including DNS records and web redirects
 
-// TODO: PklDoc Link
+[Domains PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/patterns/Domains.html)
 
 ```pkl
 import "@cfn-pkl-extras/patterns.pkl"
@@ -76,11 +78,11 @@ Outputs {
 }
 ```
 
-## Pattern - DNS
+### Pattern - DNS
 
 > Manage DNS records
 
-// TODO: PklDoc Link
+[DNS PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/patterns/DNS.html)
 
 ```pkl
 import "@cfn-pkl-extras/patterns.pkl"
@@ -112,11 +114,13 @@ Outputs {
 }
 ```
 
-## Custom Resources
+## Lower-Level Abstractions
+
+### Custom Resources
 
 > Create CloudFormation Custom Resources from inline code or a GitHub repo
 
-// TODO: PklDoc link
+[CustomResource PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/customResources/CustomResource.html)
 
 Inline Example:
 ```pkl
@@ -190,9 +194,9 @@ aDomain = domainCustomResource.instance(new Mapping {
 })
 ```
 
-## Hosted Zones & Domain Records
+### Hosted Zones & Domain Records
 
-// TODO: PklDoc link
+[route53 PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/route53/index.html)
 
 ```pkl
 amends "@cfn/template.pkl"
@@ -218,11 +222,11 @@ Resources {
 }
 ```
 
-## Domains
+### Domains
 
 > Register & transfer domain names
 
-// TODO: PklDoc link
+[route53 PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/route53/index.html)
 
 ```pkl
 amends "@cfn/template.pkl"
