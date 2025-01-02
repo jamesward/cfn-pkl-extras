@@ -7,7 +7,7 @@ import "@cfn/cloudformation.pkl" as cfn
 import "@cfn/aws/route53/hostedzone.pkl" as hostedzone
 import "@cfn/aws/route53/recordset.pkl" as recordset
 
-const domainNameRegex = #"[_A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63}(?<!-))*\.[A-Za-z]{2,}"#
+const domainNameRegex = #"[A-Za-z0-9-_]{1,63}(?<!-)(\.[A-Za-z0-9-_]{1,63}(?<!-))*\.[A-Za-z]{2,}"#
 
 const local validDomainNameRegex: Regex = Regex("^\(domainNameRegex)$")
 
@@ -141,6 +141,24 @@ const function apexAndRecordToDomainName(apexDomain: ApexDomainName, domainRecor
   let (key = if (domainRecord.sub != null) "\(domainRecord.sub).\(apexDomain)" else apexDomain)
     Pair(new DomainName { name = key }, domainRecord)
 
+const function stringChunkR(s: String, length: Int, parts: List<String>): List<String> =
+  if (s.length > length)
+    stringChunkR(s.drop(length), length, parts.add(s.take(length)))
+  else
+    parts.add(s)
+
+const function stringChunk(s: String, length: Int): List<String> =
+  stringChunkR(s, length, List())
+
+const function domainRecordToResourceRecords(domainRecord: DomainRecord): Listing<String> =
+  domainRecord.values.toList().flatMap(
+    (value: String) ->
+      // max length of record is 255
+      if (domainRecord.type == "TXT")
+        stringChunk(value, 255).map((s) -> "\"\(s)\"")
+      else
+        List(value)
+  ).toListing()
 
 const function domainRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<patterns.ResourceName, cfn.Resource> =
   new Mapping<patterns.ResourceName, cfn.Resource> {
@@ -151,7 +169,7 @@ const function domainRecords(apexDomain: ApexDomainName, records: Listing<Domain
         Name = domainNameAndRecord.first.name
         TypeProperty = domainNameAndRecord.second.type
         TTL = domainNameAndRecord.second.ttl?.toUnit("s")?.value?.toString() ?? "300" // default TTL
-        ResourceRecords = domainNameAndRecord.second.values.toList().map((value) -> if (domainNameAndRecord.second.type == "TXT") "\"\(value)\"" else value).toListing()
+        ResourceRecords = domainRecordToResourceRecords(domainNameAndRecord.second)
       }
     }
   }
