@@ -9,7 +9,7 @@ package {
   baseUri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras"
   packageZipUrl = "https://github.com/jamesward/cfn-pkl-extras/releases/download/\(name)@\(version)/\(name)@\(version).zip"
   sourceCode = "https://github.com/jamesward/cfn-pkl-extras"
-  sourceCodeUrlScheme = "\(sourceCode)/blob/\(name)@\(version)%{path}#L%{line}-L%{endLine}"
+  sourceCodeUrlScheme = "\(sourceCode)/blob/\(name)@\(version)/src%{path}#L%{line}-L%{endLine}"
   documentation = "https://jamesward.github.io/cfn-pkl-extras"
   license = "Apache-2.0"
   description = """
