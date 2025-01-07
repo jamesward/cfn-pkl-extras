@@ -13,7 +13,7 @@ amends "pkl:Project"
 
 dependencies {
   ["cfn-pkl-extras"] {
-    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.0.7"
+    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.0.8"
   }
 }
 ```

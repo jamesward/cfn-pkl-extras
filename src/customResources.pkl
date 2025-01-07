@@ -121,7 +121,7 @@ class CustomResource {
         runtime = "python3.9"
         handler = "index.handler"
         timeout = 900.s
-        body = read("../resources/triggerbuild.py").text
+        body = read("resources/triggerbuild.py").text
       }
       allow = new Allow {
         actions {
@@ -139,7 +139,7 @@ class CustomResource {
         runtime = "python3.9"
         handler = "index.handler"
         timeout = 900.s
-        body = read("../resources/cleanupbucket.py").text
+        body = read("resources/cleanupbucket.py").text
       }
       allow = new Allow {
         actions {
