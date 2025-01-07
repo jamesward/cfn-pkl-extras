@@ -13,104 +13,71 @@ amends "pkl:Project"
 
 dependencies {
   ["cfn-pkl-extras"] {
-    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.0.6"
+    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.0.7"
   }
 }
 ```
 
-## High-Level Abstractions
-
-### Pattern - Domains
+## High-Level Template for Domains & DNS
 
 > Register, transfer, and manage domains including DNS records and web redirects
 
-[Domains PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/patterns/Domains.html)
+[PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/template/)
 
 ```pkl
-import "@cfn-pkl-extras/patterns.pkl"
+amends "@cfn-pkl-extras/template.pkl"
 
-local domains = new patterns.Domains {
-  contact {
-    // your contact details
-  }
-
-  domains {
-    ["foo.com"] {
-      records {
-        new {
-          type = "A"
-          values {
-            "192.168.0.1"
-          }
-        }
-        new {
-          sub = "www"
-          type = "CNAME"
-          values {
-            "asite.com"
-          }
-        }
-      }
-    }
-
-    ["bar.com"] {
-      redirect {
-        to = "https://coolsite.com"
-        aliases {
-          "www.bar.com"
-        }
-      }
-    }
-  }
-}
-```
-
-Put the resources & outputs in a template with cloudformation-pkl:
-```pkl
-amends "@cfn/template.pkl"
-
-Resources {
-  ...domains.resources
+contact {
+  firstName = "Joe"
+  lastName = "Bob"
+  type = "PERSON"
+  addressLine1 = "PO Box 123"
+  city = "Anywhere"
+  state = "CA"
+  countryCode = "US"
+  zipCode = "93444"
+  phoneNumber = "+1.3035551212"
+  email = "joe@bob.com"
 }
 
-Outputs {
-  ...domains.outputs
-}
-```
-
-### Pattern - DNS
-
-> Manage DNS records
-
-[DNS PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/patterns/DNS.html)
-
-```pkl
-import "@cfn-pkl-extras/patterns.pkl"
-
-local dns = new patterns.DNS {
-  domains {
-    ["foo.dev"] {
+registeredDomains {
+  ["foo.com"] {
+    records {
       new {
         type = "A"
         values {
           "192.168.0.1"
         }
       }
+      new {
+        sub = "www"
+        type = "CNAME"
+        values {
+          "asite.com"
+        }
+      }
+    }
+  }
+
+  ["bar.com"] {
+    redirect {
+      to = "https://coolsite.com"
+      aliases {
+        "www.bar.com"
+      }
     }
   }
 }
-```
 
-Put the resources & outputs in a template with cloudformation-pkl:
-```pkl
-amends "@cfn/template.pkl"
-
-Resources {
-  ...dns.resources
-}
-
-Outputs {
-  ...dns.outputs
+externalDomains {
+  ["foo.dev"] {
+    new {
+      type = "A"
+      values {
+        "34.117.229.110"
+      }
+    }
+  }
 }
 ```
 

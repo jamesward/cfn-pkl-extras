@@ -1,6 +1,6 @@
 module `cfn-pkl-extras`.customResources
 
-import "patterns.pkl" as patterns
+import "patterns.pkl"
 import "@cfn/cloudformation.pkl" as cfn
 import "@cfn/aws/codebuild/project.pkl" as codebuildproject
 import "@cfn/aws/s3/bucket.pkl" as s3bucket
@@ -34,7 +34,7 @@ class CustomResource {
   allow: Allow?
   managedPolicyArns: Listing<String>
 
-  hidden resourcesForCodeOrRepo: Mapping<patterns.ResourceName, cfn.Resource> =
+  fixed resourcesForCodeOrRepo: Mapping<patterns.ResourceName, cfn.Resource> =
     new Mapping<patterns.ResourceName, cfn.Resource> {
       ["\(resourceName)Role"] = new role.Role {
         AssumeRolePolicyDocument {
@@ -82,9 +82,15 @@ class CustomResource {
             "\(resourceName)TriggerBuild"
 //             "\(resourceName)BuildProject"
           }
+//           Environment {
+//             Variables {
+//               // maybe cause the function to update after the build finishes
+//               ["BUILD_VERSION"] = cfn.Ref("\(resourceName)TriggerBuild")
+//             }
+//           }
           Code {
             S3Bucket = cfn.Ref("\(resourceName)BuildBucket")
-            S3Key = "function.zip"
+            S3Key = "function-\(source.commit).zip"
           }
         }
       }
@@ -103,10 +109,10 @@ class CustomResource {
       }
     }
 
-  hidden resourcesForCode: Mapping<patterns.ResourceName, cfn.Resource> =
+  fixed resourcesForCode: Mapping<patterns.ResourceName, cfn.Resource> =
     resourcesForCodeOrRepo
 
-  hidden resourcesForRepo: Mapping<patterns.ResourceName, cfn.Resource> =
+  fixed resourcesForRepo: Mapping<patterns.ResourceName, cfn.Resource> =
     let (repo: Repo = source)
     let (topLevelResourceName = resourceName)
     let (triggerBuild = new CustomResource {
@@ -115,76 +121,7 @@ class CustomResource {
         runtime = "python3.9"
         handler = "index.handler"
         timeout = 900.s
-        body = """
-          import boto3
-          import cfnresponse
-          import time
-
-          def handler(event, context):
-            try:
-              if event['RequestType'] in ['Create', 'Update']:
-                codebuild = boto3.client('codebuild')
-
-                build = codebuild.start_build(
-                  projectName=event['ResourceProperties']['ProjectName']
-                )
-
-                build_id = build['build']['id']
-
-                # Poll until complete or timeout
-                while True:
-                  # Check remaining lambda execution time
-                  if context.get_remaining_time_in_millis() < 10000:  # 10 seconds buffer
-                    raise Exception("Lambda timeout approaching before build completion")
-
-                  response = codebuild.batch_get_builds(ids=[build_id])
-                  if not response['builds']:
-                    raise Exception(f"Build {build_id} not found")
-
-                  build_status = response['builds'][0]['buildStatus']
-
-                  if build_status == 'SUCCEEDED':
-                      response_data = {
-                          'BuildId': build_id,
-                          'Status': build_status
-                      }
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
-                      return
-
-                  elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
-                      # Get the build logs URL and failure details
-                      logs = response['builds'][0].get('logs', {})
-                      log_url = logs.get('deepLink', 'No logs URL available')
-                      phase_details = next((phase for phase in response['builds'][0].get('phases', [])
-                                          if phase.get('phaseStatus') == 'FAILED'), {})
-
-                      error_message = (
-                          f"Build failed with status: {build_status}. "
-                          f"Phase: {phase_details.get('phaseType', 'Unknown')}. "
-                          f"Error: {phase_details.get('statusMessage', 'No error message available')}. "
-                          f"Logs: {log_url}"
-                      )
-
-                      response_data = {
-                          'BuildId': build_id,
-                          'Status': build_status,
-                          'Error': error_message
-                      }
-                      cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
-                      return
-
-                  # Still in progress, wait before next check
-                  time.sleep(10)
-
-              elif event['RequestType'] == 'Delete':
-               cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-
-            except Exception as e:
-              print(f"Error: {str(e)}")
-              cfnresponse.send(event, context, cfnresponse.FAILED, {
-                'Error': str(e)
-              })
-          """
+        body = read("../resources/triggerbuild.py").text
       }
       allow = new Allow {
         actions {
@@ -202,25 +139,7 @@ class CustomResource {
         runtime = "python3.9"
         handler = "index.handler"
         timeout = 900.s
-        body = """
-          import boto3
-          import cfnresponse
-
-          def handler(event, context):
-            bucket_name = event['ResourceProperties']['BucketName']
-            s3 = boto3.resource('s3')
-            bucket = s3.Bucket(bucket_name)
-
-            try:
-              if event['RequestType'] == 'Delete':
-                # Delete all objects including versions
-                bucket.object_versions.all().delete()
-                bucket.objects.all().delete()
-
-              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-            except Exception as e:
-                cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
-          """
+        body = read("../resources/cleanupbucket.py").text
       }
       allow = new Allow {
         actions {
@@ -290,6 +209,8 @@ class CustomResource {
 
         [triggerBuild.resourceName] = triggerBuild.instance(new Mapping {
           ["ProjectName"] = cfn.Ref("\(topLevelResourceName)BuildProject")
+          // causes an update when the commit changes?
+          ["SourceVersion"] = repo.commit
         })
 
         ...cleanupBucket.resourcesForCode
@@ -303,7 +224,7 @@ class CustomResource {
           Artifacts {
             Type = "S3"
             Location = cfn.Ref("\(resourceName)BuildBucket")
-            Name = "function.zip"
+            Name = "function-\(repo.commit).zip"
             Packaging = "ZIP"
           }
           Source {
@@ -321,6 +242,6 @@ class CustomResource {
         ...resourcesForCodeOrRepo
       }
 
-  hidden resources: Mapping<patterns.ResourceName, cfn.Resource> =
+  fixed resources: Mapping<patterns.ResourceName, cfn.Resource> =
     if (source is Code) resourcesForCode else resourcesForRepo
 }

@@ -1,12 +1,13 @@
 module `cfn-pkl-extras`.patterns
 
-import "@cfn/cloudformation.pkl" as cfn
-import "@cfn/aws/route53/recordset.pkl" as recordset
-import "@cfn/aws/route53/hostedzone.pkl" as hostedzone
-import "@cfn/aws/cloudfront/distribution.pkl" as distribution
+import "@cfn/cloudformation.pkl"
+import "@cfn/aws/route53/recordset.pkl"
+import "@cfn/aws/route53/hostedzone.pkl"
+import "@cfn/aws/cloudfront/distribution.pkl"
 import "@cfn/aws/cloudfront/function.pkl" as cloudfrontFunction
-import "@cfn/aws/certificatemanager/certificate.pkl" as certificate
-import "route53.pkl" as route53
+import "@cfn/aws/certificatemanager/certificate.pkl"
+import "route53.pkl"
+
 
 // todo: must not start with a number?
 const resourceNameClases = "A-Za-z0-9"
@@ -14,12 +15,6 @@ const resourceNameRegex = Regex("[\(resourceNameClases)]+")
 const resourceNameInvalidRegex = Regex("[^\(resourceNameClases)]")
 
 typealias ResourceName = String(matches(resourceNameRegex), length < 256)
-
-
-class DomainTemplate {
-  resources: Mapping<ResourceName, cfn.Resource>
-  outputs: Mapping<ResourceName, cfn.Output>
-}
 
 
 class BasicRedirect {
@@ -55,13 +50,13 @@ class Domains {
         transferAuthCode = domainDetails.authCode
         // todo: the way we set the nameservers is brittle
         nameServers = if (domainDetails.nameServers.isEmpty && (domainDetails.redirect != null || domainDetails.ghpages != null || !domainDetails.records.isEmpty))
-            cfn.GetAtt("\(domainName.apexResourceName)HostedZone", "NameServers")
+            cloudformation.GetAtt("\(domainName.apexResourceName)HostedZone", "NameServers")
           else
             domainDetails.nameServers
         autoRenew = domainDetails.autoRenew
       }
 
-  function apexDomainToResources(apexDomain: route53.ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cfn.Resource> =
+  function apexDomainToResources(apexDomain: route53.ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cloudformation.Resource> =
     if (domainDetails.redirect != null)
       new {
         ...apexDomainToDomain(apexDomain, domainDetails).resources
@@ -118,7 +113,7 @@ class Domains {
       }
 
 
-  hidden resources: Mapping<ResourceName, cfn.Resource> = new Mapping<ResourceName, cfn.Resource> {
+  fixed resources: Mapping<ResourceName, cloudformation.Resource> = new Mapping<ResourceName, cloudformation.Resource> {
     ...route53.domainCustomResource.resources
 
     ...route53.hostedZoneCustomResource.resources
@@ -129,13 +124,13 @@ class Domains {
   }
 
   // output the hostedzones
-  hidden outputs: Mapping<String, cfn.Output> = new {
+  fixed outputs: Mapping<String, cloudformation.Output> = new {
     ...resources
       .toMap()
       .filter((_, resource) -> resource.Type == "AWS::Route53::HostedZone")
-      .mapValues((resourceName, resource) -> new cfn.Output {
+      .mapValues((resourceName, resource) -> new cloudformation.Output {
         Description = "\(resource.Properties["Name"])"
-        Value = cfn.Ref(resourceName)
+        Value = cloudformation.Ref(resourceName)
         Export {
            Name = resourceName
         }
@@ -155,30 +150,30 @@ class Domains {
 //   url: String(matches(Regex("https://\(domainNameRegex)")))
 // }
 
-const function distributionRecordSets(domainName: route53.DomainName): Mapping<ResourceName, cfn.Resource> =
-  new Mapping<ResourceName, cfn.Resource> {
+const function distributionRecordSets(domainName: route53.DomainName): Mapping<ResourceName, cloudformation.Resource> =
+  new Mapping<ResourceName, cloudformation.Resource> {
     ["\(domainName.resourceName)RecordSetA"] = new recordset.RecordSet {
-      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
       Name = domainName.name
       TypeProperty = "A"
       AliasTarget {
         // The following HosteZoneId is always used for alias records pointing to CF.
         HostedZoneId = "Z2FDTNDATAQYW2"
-        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
-        DNSName = cfn.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
+        //HostedZoneId = cloudformation.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cloudformation.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
         EvaluateTargetHealth = false
       }
     }
 
     ["\(domainName.resourceName)RecordSetAAAA"] = new recordset.RecordSet {
-      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
       Name = domainName.name
       TypeProperty = "AAAA"
       AliasTarget {
         // The following HosteZoneId is always used for alias records pointing to CF.
         HostedZoneId = "Z2FDTNDATAQYW2"
-        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
-        DNSName = cfn.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
+        //HostedZoneId = cloudformation.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cloudformation.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
         EvaluateTargetHealth = false
       }
     }
@@ -193,10 +188,10 @@ class WebSiteRedirect {
   redirect: BasicRedirect?
   validationMethod: ValidationMethod
 
-  hidden statusCode = if (redirect.permanent) 301 else 302
-  hidden statusDescription = if (redirect.permanent) "Moved Permanently" else "Found"
+  fixed statusCode = if (redirect.permanent) 301 else 302
+  fixed statusDescription = if (redirect.permanent) "Moved Permanently" else "Found"
 
-  hidden redirector: String = """
+  fixed redirector: String = """
     function handler(event) {
       return {
         statusCode: \(statusCode),
@@ -208,7 +203,7 @@ class WebSiteRedirect {
     }
     """
 
-  hidden resources: Mapping<ResourceName, cfn.Resource> = new {
+  fixed resources: Mapping<ResourceName, cloudformation.Resource> = new {
     ...route53.hostedZone(domainName)
 
     ...distributionRecordSets(domainName)
@@ -224,12 +219,22 @@ class WebSiteRedirect {
       DomainValidationOptions {
         new {
           DomainName = domainName.name
-          HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+          when (validationMethod == "DNS") {
+            HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
+          }
+          when (validationMethod == "EMAIL") {
+            ValidationDomain = domainName.apex
+          }
         }
         for (alias in redirect.aliases) {
           new {
             DomainName = alias
-            HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+            when (validationMethod == "DNS") {
+              HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
+            }
+            when (validationMethod == "EMAIL") {
+              ValidationDomain = domainName.apex
+            }
           }
         }
       }
@@ -255,7 +260,7 @@ class WebSiteRedirect {
           FunctionAssociations {
             new {
               EventType = "viewer-request"
-              FunctionARN = cfn.GetAtt("\(domainName.apexResourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
+              FunctionARN = cloudformation.GetAtt("\(domainName.apexResourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
             }
           }
           ForwardedValues {
@@ -277,7 +282,7 @@ class WebSiteRedirect {
           ...redirect.aliases
         }
         ViewerCertificate {
-          AcmCertificateArn = cfn.Ref("\(domainName.apexResourceName)Certificate")
+          AcmCertificateArn = cloudformation.Ref("\(domainName.apexResourceName)Certificate")
           SslSupportMethod = "sni-only"
         }
       }
@@ -290,8 +295,8 @@ class DNS {
 
   domains: Mapping<route53.ApexDomainName, Listing<route53.DomainRecord>>
 
-  hidden resources: Mapping<ResourceName, cfn.Resource> =
-    new Mapping<ResourceName, cfn.Resource> {
+  hidden resources: Mapping<ResourceName, cloudformation.Resource> =
+    new Mapping<ResourceName, cloudformation.Resource> {
       for (apexDomainName, domainValue in domains) {
         // todo: nicer way to convert ApexDomainName to ResourceName
         ["\(new route53.DomainName { name = apexDomainName }.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
@@ -302,13 +307,13 @@ class DNS {
       }
     }
 
-  hidden outputs: Mapping<String, cfn.Output> = new {
+  hidden outputs: Mapping<String, cloudformation.Output> = new {
     ...resources
       .toMap()
       .filter((_, resource) -> resource.Type == "AWS::Route53::HostedZone")
-      .mapValues((resourceName, resource) -> new cfn.Output {
+      .mapValues((resourceName, resource) -> new cloudformation.Output {
         Description = "\(resource.Properties["Name"])"
-        Value = cfn.Ref(resourceName)
+        Value = cloudformation.Ref(resourceName)
         Export {
           Name = resourceName
         }
@@ -408,33 +413,33 @@ class WebSite {
 
   hidden bucket = "\(domainName.resourceName)WebsiteBucket"
 
-  hidden resources: Mapping<ResourceName, cfn.Resource> = new {
+  hidden resources: Mapping<ResourceName, cloudformation.Resource> = new {
     ["\(domainName.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
       Name = domainName.apex
     }
 
     ["\(domainName.resourceName)RecordSetA"] = new recordset.RecordSet {
-      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
       Name = domainName.name
       TypeProperty = "A"
       AliasTarget {
         // The following HosteZoneId is always used for alias records pointing to CF.
         HostedZoneId = "Z2FDTNDATAQYW2"
-        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
-        DNSName = cfn.GetAtt("\(domainName.resourceName)Distribution", "DomainName")
+        //HostedZoneId = cloudformation.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cloudformation.GetAtt("\(domainName.resourceName)Distribution", "DomainName")
         EvaluateTargetHealth = false
       }
     }
 
     ["\(domainName.resourceName)RecordSetAAAA"] = new recordset.RecordSet {
-      HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+      HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
       Name = domainName.name
       TypeProperty = "AAAA"
       AliasTarget {
         // The following HosteZoneId is always used for alias records pointing to CF.
         HostedZoneId = "Z2FDTNDATAQYW2"
-        //HostedZoneId = cfn.GetAtt("Distribution", "HostedZoneId")
-        DNSName = cfn.GetAtt("\(domainName.resourceName)Distribution", "DomainName")
+        //HostedZoneId = cloudformation.GetAtt("Distribution", "HostedZoneId")
+        DNSName = cloudformation.GetAtt("\(domainName.resourceName)Distribution", "DomainName")
         EvaluateTargetHealth = false
       }
     }
@@ -446,7 +451,7 @@ class WebSite {
       DomainValidationOptions {
         new {
           DomainName = domainName.name
-          HostedZoneId = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+          HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
         }
       }
     }
@@ -457,7 +462,7 @@ class WebSite {
     }
 
     ["\(domainName.resourceName)BucketPolicy"] = new bucketpolicy.BucketPolicy {
-      Bucket = cfn.Ref("\(domainName.resourceName)WebsiteBucket")
+      Bucket = cloudformation.Ref("\(domainName.resourceName)WebsiteBucket")
       PolicyDocument {
         Version = "2012-10-17"
         Statement {
@@ -466,11 +471,11 @@ class WebSite {
             Principal {
               Service = "cloudfront.amazonaws.com"
             }
-            Resource = cfn.Sub("arn:aws:s3:::${\(domainName.resourceName)WebsiteBucket}/*")
+            Resource = cloudformation.Sub("arn:aws:s3:::${\(domainName.resourceName)WebsiteBucket}/*")
             Effect = "Allow"
             Condition {
               StringEquals {
-                `AWS:SourceArn` = cfn.Sub("arn:aws:cloudfront::${AWS::AccountId}:distribution/${\(domainName.resourceName)Distribution.Id}")
+                `AWS:SourceArn` = cloudformation.Sub("arn:aws:cloudfront::${AWS::AccountId}:distribution/${\(domainName.resourceName)Distribution.Id}")
               }
             }
           }
@@ -521,7 +526,7 @@ class WebSite {
             FunctionAssociations {
               new {
                 EventType = "viewer-request"
-                FunctionARN = cfn.GetAtt("\(domainName.resourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
+                FunctionARN = cloudformation.GetAtt("\(domainName.resourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
               }
             }
           }
@@ -531,16 +536,16 @@ class WebSite {
           domainName.name
         }
         ViewerCertificate {
-          AcmCertificateArn = cfn.Ref("\(domainName.resourceName)Certificate")
+          AcmCertificateArn = cloudformation.Ref("\(domainName.resourceName)Certificate")
           SslSupportMethod = "sni-only"
         }
         Origins {
           new {
             Id = "WebOrigin"
-            DomainName = cfn.GetAtt("\(domainName.resourceName)WebsiteBucket", "RegionalDomainName")
+            DomainName = cloudformation.GetAtt("\(domainName.resourceName)WebsiteBucket", "RegionalDomainName")
             // it seems this must be specified but empty?
             S3OriginConfig { }
-            OriginAccessControlId = cfn.GetAtt("\(domainName.resourceName)OriginAccessControl", "Id")
+            OriginAccessControlId = cloudformation.GetAtt("\(domainName.resourceName)OriginAccessControl", "Id")
           }
         }
       }

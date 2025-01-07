@@ -1,27 +1,32 @@
 module `cfn-pkl-extras`.route53
 
 import "pkl:Project"
-import "patterns.pkl" as patterns
+import "patterns.pkl"
 import "customResources.pkl"
-import "@cfn/cloudformation.pkl" as cfn
-import "@cfn/aws/route53/hostedzone.pkl" as hostedzone
-import "@cfn/aws/route53/recordset.pkl" as recordset
+import "@cfn/cloudformation.pkl"
+import "@cfn/aws/route53/hostedzone.pkl"
+import "@cfn/aws/route53/recordset.pkl"
+import "@cfn/aws/route53/dnssec.pkl"
+import "@cfn/aws/route53/keysigningkey.pkl"
+import "@cfn/aws/kms/key.pkl"
+
 
 const domainNameRegex = #"[A-Za-z0-9-_]{1,63}(?<!-)(\.[A-Za-z0-9-_]{1,63}(?<!-))*\.[A-Za-z]{2,}"#
 
-const local validDomainNameRegex: Regex = Regex("^\(domainNameRegex)$")
+const validDomainNameRegex: Regex = Regex("^\(domainNameRegex)$")
 
 typealias ValidDomainName = String(matches(validDomainNameRegex))
 
 
 class DomainName {
   name: ValidDomainName
-  hidden resourceName: patterns.ResourceName = name.replaceAll(patterns.resourceNameInvalidRegex, "")
+  dnssec: Boolean = false
+  fixed resourceName: patterns.ResourceName = name.replaceAll(patterns.resourceNameInvalidRegex, "")
 
   // causes StackOverflow
   //  fixed apex: DomainName = new DomainName { name = parts.takeLast(2).join(".") }
-  hidden apex: String = name.split(".").takeLast(2).join(".")
-  hidden apexResourceName: patterns.ResourceName = apex.replaceAll(patterns.resourceNameInvalidRegex, "")
+  fixed apex: String = name.split(".").takeLast(2).join(".")
+  fixed apexResourceName: patterns.ResourceName = apex.replaceAll(patterns.resourceNameInvalidRegex, "")
 }
 
 // todo: phone constraints
@@ -41,7 +46,7 @@ class Contact {
   city: NonEmptyString
   state: NonEmptyString
   countryCode: CountryCode
-  zipCode: UInt32
+  zipCode: NonEmptyString
   phoneNumber: Phone
   email: Project.EmailAddress
 }
@@ -49,11 +54,11 @@ class Contact {
 const domainCustomResource = new customResources.CustomResource {
   resourceName = "Domain"
   source = new customResources.Repo {
-    runtime = "python3.9"
+    runtime = "python3.13"
     handler = "index.handler"
     timeout = 10.s
     gitHubOrgRepo = "jamesward/cfn-domain-resource"
-    commit = "70e82a96b63a74bb302201e41365707beecaf0ae"
+    commit = "546c24f8518e5ed8d6fa2d1424cbbe6a85d45370"
   }
   managedPolicyArns {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
@@ -67,7 +72,7 @@ class Domain {
   nameServers: Listing<ValidDomainName> | Mapping
   autoRenew: Boolean
 
-  hidden resources: Mapping<patterns.ResourceName, cfn.Resource> =
+  fixed resources: Mapping<patterns.ResourceName, cloudformation.Resource> =
     new {
       ["\(domainName.apexResourceName)Domain"] =
         domainCustomResource.instance(new Mapping {
@@ -84,7 +89,7 @@ class Domain {
 
 typealias DomainRecordType = "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "NS" | "SOA" | "SRV" | "PTR" | "CAA" | "DNSKEY" | "DS" | "NAPTR" | "SSHFP" | "TLSA"
 
-typealias ApexDomainName = String(matches(Regex(#"^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$"#)))
+typealias ApexDomainName = String(matches(Regex(#"[a-zA-Z0-9-]+\.[a-zA-Z]{2,}"#)))
 
 
 class DomainRecord {
@@ -95,7 +100,7 @@ class DomainRecord {
   values: Listing<String>(!isEmpty)
 }
 
-const hostedZoneCustomResource = new customResources.CustomResource {
+hostedZoneCustomResource = new customResources.CustomResource {
   resourceName = "HostedZoneManager"
   source = new customResources.Repo {
     runtime = "python3.9"
@@ -116,41 +121,100 @@ const hostedZoneCustomResource = new customResources.CustomResource {
       "route53domains:UpdateDomainNameservers"
     }
     resource {
-      cfn.Sub("arn:aws:route53:::hostedzone/*")
+      // todo: need Sub?
+      cloudformation.Sub("arn:aws:route53:::hostedzone/*")
     }
   }
 }
 
 // the reason for the HostedZoneManager is because HostedZone can't be deleted when there are non-NS records associated with it
 // and the Certificate creates an additional CNAME record which prevents deletion
-const function hostedZone(domainName: DomainName): Mapping<patterns.ResourceName, cfn.Resource> =
+function hostedZone(domainName: DomainName): Mapping<patterns.ResourceName, cloudformation.Resource> =
   new {
     ["\(domainName.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
       Name = domainName.apex
     }
 
+    when (domainName.dnssec) {
+      ["\(domainName.apexResourceName)HostedZoneDNSSEC"] = new dnssec.DNSSEC {
+        DependsOn {
+          "\(domainName.apexResourceName)HostedZoneKSK"
+        }
+        HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
+      }
+
+      ["\(domainName.apexResourceName)HostedZoneKey"] = new key.Key {
+        KeySpec = "ECC_NIST_P256"
+        KeyUsage = "SIGN_VERIFY"
+        KeyPolicy {
+          Version = "2012-10-17"
+          Id = "dnssec-policy"
+          Statement {
+            new {
+              Sid = "Enable IAM User Permissions"
+              Effect = "Allow"
+              Principal {
+                AWS = cloudformation.Sub("arn:aws:iam::${AWS::AccountId}:root")
+              }
+              Action = "kms:*"
+              Resource = "*"
+            }
+            new {
+              Sid = "Allow Route 53 DNSSEC Service"
+              Effect = "Allow"
+              Principal {
+                Service = "dnssec-route53.amazonaws.com"
+              }
+              Action {
+                "kms:DescribeKey"
+                "kms:GetPublicKey"
+                "kms:Sign"
+              }
+              Resource = "*"
+            }
+            new {
+              Sid = "Allow Route 53 DNSSEC to CreateGrant"
+              Effect = "Allow"
+              Principal {
+                Service = "dnssec-route53.amazonaws.com"
+              }
+              Action = "kms:CreateGrant"
+              Resource = "*"
+            }
+          }
+        }
+      }
+
+      ["\(domainName.apexResourceName)HostedZoneKSK"] = new keysigningkey.KeySigningKey {
+        Name = domainName.apexResourceName
+        HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
+        KeyManagementServiceArn = cloudformation.GetAtt("\(domainName.apexResourceName)HostedZoneKey", "Arn")
+        Status = "ACTIVE"
+      }
+    }
+
     ["\(domainName.apexResourceName)HostedZoneCleanup"] =
       hostedZoneCustomResource.instance(new Mapping {
         ["DomainName"] = domainName.apex
-        ["HostedZoneId"] = cfn.Ref("\(domainName.apexResourceName)HostedZone")
+        ["HostedZoneId"] = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
       })
   }
 
 
-const function apexAndRecordToDomainName(apexDomain: ApexDomainName, domainRecord: DomainRecord): Pair<DomainName, DomainRecord> =
+function apexAndRecordToDomainName(apexDomain: ApexDomainName, domainRecord: DomainRecord): Pair<DomainName, DomainRecord> =
   let (key = if (domainRecord.sub != null) "\(domainRecord.sub).\(apexDomain)" else apexDomain)
     Pair(new DomainName { name = key }, domainRecord)
 
-const function stringChunkR(s: String, length: Int, parts: List<String>): List<String> =
+function stringChunkR(s: String, length: Int, parts: List<String>): List<String> =
   if (s.length > length)
     stringChunkR(s.drop(length), length, parts.add(s.take(length)))
   else
     parts.add(s)
 
-const function stringChunk(s: String, length: Int): List<String> =
+function stringChunk(s: String, length: Int): List<String> =
   stringChunkR(s, length, List())
 
-const function domainRecordToResourceRecords(domainRecord: DomainRecord): Listing<String> =
+function domainRecordToResourceRecords(domainRecord: DomainRecord): Listing<String> =
   domainRecord.values.toList().flatMap(
     (value: String) ->
       // max length of record is 255
@@ -160,12 +224,12 @@ const function domainRecordToResourceRecords(domainRecord: DomainRecord): Listin
         List(value)
   ).toListing()
 
-const function domainRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<patterns.ResourceName, cfn.Resource> =
-  new Mapping<patterns.ResourceName, cfn.Resource> {
+function domainRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<patterns.ResourceName, cloudformation.Resource> =
+  new Mapping<patterns.ResourceName, cloudformation.Resource> {
     // todo: nicer
     for (domainNameAndRecord in records.toList().map((domainRecord) -> apexAndRecordToDomainName(apexDomain, domainRecord))) {
       ["\(domainNameAndRecord.first.resourceName)RecordSet\(domainNameAndRecord.second.type)"] = new recordset.RecordSet {
-        HostedZoneId = cfn.Ref("\(domainNameAndRecord.first.apexResourceName)HostedZone")
+        HostedZoneId = cloudformation.Ref("\(domainNameAndRecord.first.apexResourceName)HostedZone")
         Name = domainNameAndRecord.first.name
         TypeProperty = domainNameAndRecord.second.type
         TTL = domainNameAndRecord.second.ttl?.toUnit("s")?.value?.toString() ?? "300" // default TTL

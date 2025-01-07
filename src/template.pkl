@@ -1,0 +1,39 @@
+module `cfn-pkl-extras`.template
+
+import "@cfn/template.pkl" as cloudformationTemplate
+import "route53.pkl"
+import "patterns.pkl"
+
+/// The domain name contact to be applied to all records
+contact: route53.Contact
+
+/// Domains to be registered with / transfered to Route53
+registeredDomains: Mapping<route53.ApexDomainName, patterns.DomainDetails>
+
+/// Domains registered on external registrars
+externalDomains: Mapping<route53.ApexDomainName, Listing<route53.DomainRecord>>
+
+// todo: some way to set a contact per domain
+fixed cloudFormation: cloudformationTemplate =
+  let (_contact = contact)
+  let (domains = new patterns.Domains {
+    contact = _contact
+    domains = registeredDomains
+  })
+  let (dns = new patterns.DNS {
+    domains = externalDomains
+  })
+
+  new {
+    Resources {
+      ...domains.resources
+      ...dns.resources
+    }
+
+    Outputs {
+      ...domains.outputs
+      ...dns.outputs
+    }
+  }
+
+output = cloudFormation.output
