@@ -5,20 +5,19 @@ package {
   authors {
     "James Ward <james@jamesward.com>"
   }
-  version = read?("env:VERSION")?.replaceFirst("\(name)@", "") ?? "0.0.1-SNAPSHOT"
+  version = read?("env:VERSION")?.replaceFirst("\(name)@", "") ?? "0.0.0"
   baseUri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras"
   packageZipUrl = "https://github.com/jamesward/cfn-pkl-extras/releases/download/\(name)@\(version)/\(name)@\(version).zip"
   sourceCode = "https://github.com/jamesward/cfn-pkl-extras"
   sourceCodeUrlScheme = "\(sourceCode)/blob/\(name)@\(version)/src%{path}#L%{line}-L%{endLine}"
   documentation = "https://jamesward.github.io/cfn-pkl-extras"
+  issueTracker = "https://github.com/jamesward/cfn-pkl-extras/issues"
   license = "Apache-2.0"
-  description = """
-    CloudFormation Pkl Extras
-  """
+  description = "CloudFormation Pkl Extras"
 }
 
 dependencies {
   ["cfn"] {
-    uri = "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.6"
+    uri = "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.7"
   }
 }
