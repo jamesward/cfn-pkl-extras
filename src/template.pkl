@@ -11,7 +11,7 @@ contact: route53.Contact
 registeredDomains: Mapping<route53.ApexDomainName, patterns.DomainDetails>
 
 /// Domains registered on external registrars
-externalDomains: Mapping<route53.ApexDomainName, Listing<route53.DomainRecord>>
+externalDomains: Mapping<route53.ApexDomainName, patterns.ExternalDomainDetails>
 
 // todo: some way to set a contact per domain
 fixed cloudFormation: cloudformationTemplate =
@@ -20,19 +20,20 @@ fixed cloudFormation: cloudformationTemplate =
     contact = _contact
     domains = registeredDomains
   })
-  let (dns = new patterns.DNS {
+  let (externalDomains = new patterns.ExternalDomains {
     domains = externalDomains
   })
 
   new {
     Resources {
+      ...route53.hostedZoneCustomResource.resources
       ...domains.resources
-      ...dns.resources
+      ...externalDomains.resources
     }
 
     Outputs {
       ...domains.outputs
-      ...dns.outputs
+      ...externalDomains.outputs
     }
   }
 
