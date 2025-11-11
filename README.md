@@ -13,7 +13,7 @@ amends "pkl:Project"
 
 dependencies {
   ["cfn-pkl-extras"] {
-    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.0.9"
+    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.1.1"
   }
 }
 ```
@@ -71,11 +71,18 @@ registeredDomains {
 
 externalDomains {
   ["foo.dev"] {
-    new {
-      type = "A"
-      values {
-        "34.117.229.110"
+    records {
+      new {
+        sub = "www"
+        type = "CNAME"
+        values {
+          "foo.herokudns.com"
+        }
       }
+    }
+    redirect {
+      to = "https://www.foo.dev"
+      preservePath = true
     }
   }
 }

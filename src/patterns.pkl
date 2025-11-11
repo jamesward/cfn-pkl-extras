@@ -22,6 +22,7 @@ class BasicRedirect {
   to: Uri
   permanent: Boolean = false
   aliases: Listing<route53.ValidDomainName>
+  preservePath: Boolean = false
 }
 
 
@@ -171,7 +172,6 @@ const function distributionRecordSets(domainName: route53.DomainName): Mapping<R
 
 typealias ValidationMethod = "DNS" | "EMAIL"
 
-// todo: option to preserve path
 class WebSiteRedirect {
 
   domainName: route53.DomainName
@@ -181,17 +181,41 @@ class WebSiteRedirect {
   fixed statusCode = if (redirect.permanent) 301 else 302
   fixed statusDescription = if (redirect.permanent) "Moved Permanently" else "Found"
 
-  fixed redirector: String = """
-    function handler(event) {
-      return {
-        statusCode: \(statusCode),
-        statusDescription: '\(statusDescription)',
-        headers: {
-          'location': { value: '\(redirect.to)' }
-        }
-      };
-    }
-    """
+  fixed postStatusCode = if (redirect.permanent) 308 else 307
+  fixed postStatusDescription = if (redirect.permanent) "Permanent Redirect" else "Temporary Redirect"
+
+  fixed redirector: String =
+    if (redirect.preservePath)
+      """
+      function handler(event) {
+        var path = event.request.uri
+        var statusCode = (event.request.method === 'POST') ? \(postStatusCode) : \(statusCode)
+        var statusDescription = (event.request.method === 'POST') ? '\(postStatusDescription)' : '\(statusDescription)'
+
+        return {
+          statusCode: statusCode,
+          statusDescription: statusDescription,
+          headers: {
+            'location': { value: '\(redirect.to)' + path }
+          }
+        };
+      }
+      """
+    else
+      """
+      function handler(event) {
+        var statusCode = (event.request.method === 'POST') ? \(postStatusCode) : \(statusCode)
+        var statusDescription = (event.request.method === 'POST') ? '\(postStatusDescription)' : '\(statusDescription)'
+
+        return {
+          statusCode: statusCode,
+          statusDescription: statusDescription,
+          headers: {
+            'location': { value: '\(redirect.to)' }
+          }
+        };
+      }
+      """
 
   fixed resources: Mapping<ResourceName, cloudformation.Resource> = new {
     ...route53.hostedZone(domainName)
@@ -255,6 +279,15 @@ class WebSiteRedirect {
           }
           ForwardedValues {
             QueryString = false
+          }
+          AllowedMethods {
+            "HEAD"
+            "DELETE"
+            "POST"
+            "GET"
+            "OPTIONS"
+            "PUT"
+            "PATCH"
           }
         }
         Origins {
