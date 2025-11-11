@@ -35,6 +35,10 @@ class DomainDetails {
   autoRenew: Boolean = true
 }
 
+class ExternalDomainDetails {
+  redirect: BasicRedirect?
+  records: Listing<route53.DomainRecord>
+}
 
 class Domains {
   contact: route53.Contact
@@ -115,8 +119,6 @@ class Domains {
 
   fixed resources: Mapping<ResourceName, cloudformation.Resource> = new Mapping<ResourceName, cloudformation.Resource> {
     ...route53.domainCustomResource.resources
-
-    ...route53.hostedZoneCustomResource.resources
 
     for (apexDomain, domainDetails in domains) {
       ...apexDomainToResources(apexDomain, domainDetails)
@@ -279,32 +281,50 @@ class WebSiteRedirect {
 }
 
 
-class DNS {
+class ExternalDomains {
 
-  domains: Mapping<route53.ApexDomainName, Listing<route53.DomainRecord>>
+  domains: Mapping<route53.ApexDomainName, ExternalDomainDetails>
+
+  function apexDomainToResources(apexDomain: route53.ApexDomainName, externalDomainDetails: ExternalDomainDetails): Mapping<ResourceName, cloudformation.Resource> =
+    if (externalDomainDetails.redirect != null)
+      new {
+        ...new WebSiteRedirect {
+          domainName {
+            name = externalDomainDetails.redirect?.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
+          }
+          redirect = externalDomainDetails.redirect
+          validationMethod = "DNS"
+        }.resources
+        when (!externalDomainDetails.records.isEmpty) {
+          ...route53.domainRecords(apexDomain, externalDomainDetails.records)
+        }
+      }
+    else
+      new {
+        when (!externalDomainDetails.records.isEmpty) {
+          ...route53.hostedZone(new route53.DomainName { name = apexDomain })
+          ...route53.domainRecords(apexDomain, externalDomainDetails.records)
+        }
+      }
 
   hidden resources: Mapping<ResourceName, cloudformation.Resource> =
     new Mapping<ResourceName, cloudformation.Resource> {
-      for (apexDomainName, domainValue in domains) {
-        // todo: nicer way to convert ApexDomainName to ResourceName
-        ["\(new route53.DomainName { name = apexDomainName }.apexResourceName)HostedZone"] = new hostedzone.HostedZone {
-          Name = apexDomainName
-        }
-
-        ...route53.domainRecords(apexDomainName, domainValue)
+      for (apexDomainName, externalDomainDetails in domains) {
+        ...apexDomainToResources(apexDomainName, externalDomainDetails)
       }
     }
 
-  hidden outputs: Mapping<String, cloudformation.Output> = new {
+  // output the hostedzones
+  fixed outputs: Mapping<String, cloudformation.Output> = new {
     ...resources
       .toMap()
       .filter((_, resource) -> resource.Type == "AWS::Route53::HostedZone")
       .mapValues((resourceName, resource) -> new cloudformation.Output {
-        Description = "\(resource.Properties["Name"])"
-        Value = cloudformation.Ref(resourceName)
-        Export {
-          Name = resourceName
-        }
-      })
+      Description = "\(resource.Properties["Name"])"
+      Value = cloudformation.Ref(resourceName)
+      Export {
+        Name = resourceName
+      }
+    })
   }
 }
