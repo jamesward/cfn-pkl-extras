@@ -1,3 +1,3 @@
 // pkl eval release.pkl -f yaml -o release.yaml
 
-amends "package://pkg.pkl-lang.org/github.com/jamesward/pklgha/pklgha@0.0.25#/GitHubActionPklRelease.pkl"
+amends "package://pkg.pkl-lang.org/github.com/jamesward/pklgha/pklgha@0.0.26#/GitHubActionPklRelease.pkl"
