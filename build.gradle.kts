@@ -4,11 +4,13 @@ plugins {
 
 pkl {
     project {
+        /*
         resolvers {
             register("resolvePklDeps") {
                 projectDirectories.from(file("src/"))
             }
         }
+         */
         packagers {
             // todo: depend on resolvePklDeps
             register("makePackages") {
@@ -18,13 +20,13 @@ pkl {
                 projectDirectories.from(file("src/"))
             }
         }
+    }
 
-        if (version != "unspecified") {
-            pkldocGenerators {
-                register("pkldoc") {
-                    noSymlinks = true
-                    sourceModules = listOf(uri("package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/$version"))
-                }
+    if (version != "unspecified") {
+        pkldocGenerators {
+            register("pkldoc") {
+                noSymlinks = true
+                sourceModules = listOf(uri("package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/$version"))
             }
         }
     }
