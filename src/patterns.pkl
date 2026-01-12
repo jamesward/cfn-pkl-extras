@@ -191,12 +191,18 @@ class WebSiteRedirect {
         var path = event.request.uri
         var statusCode = (event.request.method === 'POST') ? \(postStatusCode) : \(statusCode)
         var statusDescription = (event.request.method === 'POST') ? '\(postStatusDescription)' : '\(statusDescription)'
+        var qs = Object.keys(event.request.querystring)
+          .map(function(k) {
+            var val = event.request.querystring[k].value;
+            return val ? k + '=' + val : k;
+          })
+          .join('&')
 
         return {
           statusCode: statusCode,
           statusDescription: statusDescription,
           headers: {
-            'location': { value: '\(redirect.to)' + path }
+            'location': { value: '\(redirect.to)' + path + (qs ? '?' + qs : '') }
           }
         };
       }
