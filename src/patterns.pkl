@@ -280,7 +280,7 @@ class WebSiteRedirect {
           FunctionAssociations {
             new {
               EventType = "viewer-request"
-              FunctionARN = cloudformation.GetAtt("\(domainName.apexResourceName)DistributionFunction.FunctionMetadata", "FunctionARN")
+              FunctionARN = cloudformation.GetAtt("\(domainName.apexResourceName)DistributionFunction", "FunctionMetadata.FunctionARN")
             }
           }
           ForwardedValues {
