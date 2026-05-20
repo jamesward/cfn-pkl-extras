@@ -58,7 +58,7 @@ const domainCustomResource = new customResources.CustomResource {
     handler = "index.handler"
     timeout = 10.s
     gitHubOrgRepo = "jamesward/cfn-domain-resource"
-    commit = "546c24f8518e5ed8d6fa2d1424cbbe6a85d45370"
+    commit = "9c4cdc0a1d68a7d141fcc744f157086435a953d0"
   }
   managedPolicyArns {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
@@ -71,6 +71,10 @@ class Domain {
   transferAuthCode: (String | Mapping)?
   nameServers: Listing<ValidDomainName> | Mapping
   autoRenew: Boolean
+  /// Number of years to register or transfer the domain for.
+  /// Most TLDs accept 1; some (e.g. .ai) require a minimum of 2.
+  /// Allowed range per the AWS Route 53 Domains API: 1–10.
+  durationInYears: Int(this >= 1 && this <= 10) = 1
 
   fixed resources: Mapping<patterns.ResourceName, cloudformation.Resource> =
     new {
@@ -83,6 +87,7 @@ class Domain {
             ["NameServers"] = nameServers
           }
           ["AutoRenew"] = autoRenew
+          ["DurationInYears"] = durationInYears
         })
     }
 }

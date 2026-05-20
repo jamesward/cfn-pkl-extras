@@ -34,6 +34,10 @@ class DomainDetails {
   records: Listing<route53.DomainRecord>
   nameServers: Listing<route53.ValidDomainName>
   autoRenew: Boolean = true
+  /// Number of years to register or transfer the domain for.
+  /// Most TLDs accept 1; some (e.g. .ai) require a minimum of 2.
+  /// Allowed range per the AWS Route 53 Domains API: 1–10.
+  durationInYears: Int(this >= 1 && this <= 10) = 1
 }
 
 class ExternalDomainDetails {
@@ -59,6 +63,7 @@ class Domains {
           else
             domainDetails.nameServers
         autoRenew = domainDetails.autoRenew
+        durationInYears = domainDetails.durationInYears
       }
 
   function apexDomainToResources(apexDomain: route53.ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cloudformation.Resource> =
