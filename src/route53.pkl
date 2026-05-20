@@ -58,7 +58,7 @@ const domainCustomResource = new customResources.CustomResource {
     handler = "index.handler"
     timeout = 10.s
     gitHubOrgRepo = "jamesward/cfn-domain-resource"
-    commit = "9c4cdc0a1d68a7d141fcc744f157086435a953d0"
+    commit = "90769fa5c5f22ab38274779951821986f4cf4682"
   }
   managedPolicyArns {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
