@@ -56,9 +56,12 @@ const domainCustomResource = new customResources.CustomResource {
   source = new customResources.Repo {
     runtime = "python3.13"
     handler = "index.handler"
-    timeout = 10.s
+    // Registration is asynchronous; the handler waits for the RegisterDomain
+    // operation to reach SUCCESSFUL before setting nameservers, so the Lambda
+    // needs a long timeout (was 10.s, which killed the invocation mid-wait).
+    timeout = 600.s
     gitHubOrgRepo = "jamesward/cfn-domain-resource"
-    commit = "90769fa5c5f22ab38274779951821986f4cf4682"
+    commit = "3142af000d8da9b4f6cc4e173a06125584e4483c"
   }
   managedPolicyArns {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
