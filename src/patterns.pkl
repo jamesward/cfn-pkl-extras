@@ -38,6 +38,13 @@ class DomainDetails {
   /// Most TLDs accept 1; some (e.g. .ai) require a minimum of 2.
   /// Allowed range per the AWS Route 53 Domains API: 1–10.
   durationInYears: Int(this >= 1 && this <= 10) = 1
+  /// Override the ACM certificate validation method used for a `redirect`.
+  /// When `null` (the default), the method is chosen automatically: `EMAIL`
+  /// while a transfer is pending (`authCode` set), since DNS validation is
+  /// blocked until the domain's nameservers point at Route 53; otherwise `DNS`.
+  /// Set explicitly to force a method — e.g. `DNS` when the domain already
+  /// delegates to its Route 53 hosted zone even though a transfer is in flight.
+  validationMethod: ValidationMethod?
 }
 
 class ExternalDomainDetails {
@@ -75,7 +82,7 @@ class Domains {
             name = domainDetails.redirect?.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
           }
           redirect = domainDetails.redirect
-          validationMethod = if (domainDetails.authCode != null) "EMAIL" else "DNS" // transferring domains takes a long time, blocking certification creation
+          validationMethod = domainDetails.validationMethod ?? (if (domainDetails.authCode != null) "EMAIL" else "DNS") // transferring domains takes a long time, blocking certification creation
         }.resources
         when (!domainDetails.records.isEmpty) {
           ...route53.domainRecords(apexDomain, domainDetails.records)
