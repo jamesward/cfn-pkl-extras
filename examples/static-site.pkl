@@ -1,0 +1,40 @@
+/// Example: a static website served through CloudFront, with no domain
+/// registration and no build step.
+///
+/// The repo (`jamesward-test/asdf`) already contains the static files to serve
+/// (e.g. an `index.html`), so `build` defaults to `StaticFiles` and CodeBuild
+/// just syncs the repo to S3 - no Hugo or other build tooling. (A Hugo-based
+/// example can set `build = new HugoBuild {}` instead.)
+///
+/// It uses `externalDomains` purely so that no domain is registered or
+/// transferred (unlike `registeredDomains`). Because `customDomain` is left at
+/// its default (false), the site is served on the CloudFront default domain
+/// (`*.cloudfront.net`) with the default certificate - so there is no ACM
+/// validation or NS delegation to set up, making it easy to deploy and test.
+///
+/// What gets created:
+///   - a private S3 bucket + Origin Access Control
+///   - a CloudFront distribution (with a directory-index CloudFront Function)
+///   - a CodeBuild project that syncs the repo to S3, triggered on push to `main`
+///   - the ConnectionLookup custom resource, which resolves the CodeConnections
+///     ARN of the connection deploying this stack (via CloudFormation Git sync)
+///     so CodeBuild can pull the source without a hard-coded ARN
+///
+/// Prerequisites to actually deploy:
+///   - this stack is deployed via CloudFormation Git sync (so a sync
+///     configuration + CodeConnections connection exist to resolve)
+///   - that connection's GitHub App installation has access to the
+///     `jamesward-test/asdf` repository
+amends "@cfn-pkl-extras/template.pkl"
+
+// No `contact` and no `registeredDomains` needed: this stack only uses
+// externalDomains, so nothing is registered with a registrar.
+externalDomains {
+  // `.test` is a reserved TLD; the key is only used for resource naming since
+  // customDomain is false (the site is served on the CloudFront domain).
+  ["asdf.test"] {
+    staticSite {
+      githubRepo = "jamesward-test/asdf"
+    }
+  }
+}

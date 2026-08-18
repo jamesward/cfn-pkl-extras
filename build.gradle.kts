@@ -1,5 +1,5 @@
 plugins {
-    id("org.pkl-lang") version "0.30.2"
+    id("org.pkl-lang") version "0.32.1"
 }
 
 pkl {

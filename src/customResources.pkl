@@ -31,7 +31,9 @@ class Allow {
 class CustomResource {
   resourceName: patterns.ResourceName
   source: Code | Repo
-  allow: Allow?
+  // One IAM statement per Allow, so actions with differing resource-level
+  // support can be scoped independently (least privilege).
+  allow: Listing<Allow> = new Listing {}
   managedPolicyArns: Listing<String>
 
   fixed resourcesForCodeOrRepo: Mapping<patterns.ResourceName, cfn.Resource> =
@@ -50,16 +52,20 @@ class CustomResource {
           "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
           ...managedPolicyArns
         }
-        when (allow != null) {
+        when (!allow.isEmpty) {
           Policies {
             new {
               PolicyName = resourceName
               PolicyDocument {
                 Version = "2012-10-17"
                 Statement {
-                  Effect = "Allow"
-                  Action = allow.actions
-                  Resource = allow.resource
+                  for (_allow in allow) {
+                    new {
+                      Effect = "Allow"
+                      Action = _allow.actions
+                      Resource = _allow.resource
+                    }
+                  }
                 }
               }
             }
@@ -123,13 +129,15 @@ class CustomResource {
         timeout = 900.s
         body = read("resources/triggerbuild.py").text
       }
-      allow = new Allow {
-        actions {
-          "codebuild:StartBuild"
-          "codebuild:BatchGetBuilds"
-        }
-        resource {
-          cfn.GetAtt("\(topLevelResourceName)BuildProject", "Arn")
+      allow {
+        new Allow {
+          actions {
+            "codebuild:StartBuild"
+            "codebuild:BatchGetBuilds"
+          }
+          resource {
+            cfn.GetAtt("\(topLevelResourceName)BuildProject", "Arn")
+          }
         }
       }
     })
@@ -141,17 +149,19 @@ class CustomResource {
         timeout = 900.s
         body = read("resources/cleanupbucket.py").text
       }
-      allow = new Allow {
-        actions {
-          "s3:ListBucket"
-          "s3:ListBucketVersions"
-          "s3:DeleteObject"
-          "s3:DeleteObjectVersion"
-          "s3:GetObjectVersion"
-        }
-        resource {
-          cfn.Sub("${\(topLevelResourceName)BuildBucket.Arn}")
-          cfn.Sub("${\(topLevelResourceName)BuildBucket.Arn}/*")
+      allow {
+        new Allow {
+          actions {
+            "s3:ListBucket"
+            "s3:ListBucketVersions"
+            "s3:DeleteObject"
+            "s3:DeleteObjectVersion"
+            "s3:GetObjectVersion"
+          }
+          resource {
+            cfn.Sub("${\(topLevelResourceName)BuildBucket.Arn}")
+            cfn.Sub("${\(topLevelResourceName)BuildBucket.Arn}/*")
+          }
         }
       }
     })
@@ -245,3 +255,37 @@ class CustomResource {
   fixed resources: Mapping<patterns.ResourceName, cfn.Resource> =
     if (source is Code) resourcesForCode else resourcesForRepo
 }
+
+
+// Runs `codebuild:StartBuild` on `projectResourceName` and waits for it to
+// finish, as a CloudFormation custom resource. Use this to run a build on stack
+// create/update (e.g. to publish a static site immediately on deploy) rather
+// than only on a later source push. Fails the stack if the build fails.
+function triggerBuild(triggerResourceName: patterns.ResourceName, projectResourceName: patterns.ResourceName): Mapping<patterns.ResourceName, cfn.Resource> =
+  let (cr = new CustomResource {
+    resourceName = triggerResourceName
+    source = new Code {
+      runtime = "python3.9"
+      handler = "index.handler"
+      timeout = 900.s
+      body = read("resources/triggerbuild.py").text
+    }
+    allow {
+      new Allow {
+        actions {
+          "codebuild:StartBuild"
+          "codebuild:BatchGetBuilds"
+        }
+        resource {
+          cfn.GetAtt(projectResourceName, "Arn")
+        }
+      }
+    }
+    managedPolicyArns {}
+  })
+    new Mapping {
+      ...cr.resourcesForCode
+      [triggerResourceName] = cr.instance(new Mapping {
+        ["ProjectName"] = cfn.Ref(projectResourceName)
+      })
+    }

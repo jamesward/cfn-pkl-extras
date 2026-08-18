@@ -1,0 +1,588 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  ConnectionLookupBuildBucket:
+    Type: AWS::S3::Bucket
+    Properties: {}
+  ConnectionLookupBuildProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            Effect: Allow
+            Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:GetObjectVersion
+            Resource:
+              Fn::Sub: ${ConnectionLookupBuildBucket.Arn}/*
+        PolicyName: S3Access
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+        PolicyName: Logs
+  ConnectionLookupTriggerBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - codebuild:StartBuild
+            - codebuild:BatchGetBuilds
+            Resource:
+            - Fn::GetAtt:
+              - ConnectionLookupBuildProject
+              - Arn
+        PolicyName: ConnectionLookupTriggerBuild
+  ConnectionLookupTriggerBuildFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import time
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] in ['Create', 'Update']:
+                      codebuild = boto3.client('codebuild')
+
+                      build = codebuild.start_build(
+                          projectName=event['ResourceProperties']['ProjectName']
+                      )
+
+                      build_id = build['build']['id']
+
+                      # Poll until complete or timeout
+                      while True:
+                          # Check remaining lambda execution time
+                          if context.get_remaining_time_in_millis() < 10000:  # 10 seconds buffer
+                              raise Exception("Lambda timeout approaching before build completion")
+
+                          response = codebuild.batch_get_builds(ids=[build_id])
+                          if not response['builds']:
+                              raise Exception(f"Build {build_id} not found")
+
+                          build_status = response['builds'][0]['buildStatus']
+
+                          if build_status == 'SUCCEEDED':
+                              response_data = {
+                                  'BuildId': build_id,
+                                  'Status': build_status
+                              }
+                              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                              return
+
+                          elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
+                              # Get the build logs URL and failure details
+                              logs = response['builds'][0].get('logs', {})
+                              log_url = logs.get('deepLink', 'No logs URL available')
+                              phase_details = next((phase for phase in response['builds'][0].get('phases', [])
+                                                    if phase.get('phaseStatus') == 'FAILED'), {})
+
+                              error_message = (
+                                  f"Build failed with status: {build_status}. "
+                                  f"Phase: {phase_details.get('phaseType', 'Unknown')}. "
+                                  f"Error: {phase_details.get('statusMessage', 'No error message available')}. "
+                                  f"Logs: {log_url}"
+                              )
+
+                              response_data = {
+                                  'BuildId': build_id,
+                                  'Status': build_status,
+                                  'Error': error_message
+                              }
+                              cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+                              return
+
+                          # Still in progress, wait before next check
+                          time.sleep(10)
+
+                  elif event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      'Error': str(e)
+                  })
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+        - ConnectionLookupTriggerBuildRole
+        - Arn
+      Runtime: python3.9
+      Timeout: 900
+  ConnectionLookupTriggerBuild:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceTimeout: 960
+      ServiceToken:
+        Fn::GetAtt:
+        - ConnectionLookupTriggerBuildFunction
+        - Arn
+      ProjectName:
+        Ref: ConnectionLookupBuildProject
+      SourceVersion: 73cbe0e7c843165da8b748b46c9182974f4d5f66
+  ConnectionLookupCleanupBucketRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:ListBucket
+            - s3:ListBucketVersions
+            - s3:DeleteObject
+            - s3:DeleteObjectVersion
+            - s3:GetObjectVersion
+            Resource:
+            - Fn::Sub: ${ConnectionLookupBuildBucket.Arn}
+            - Fn::Sub: ${ConnectionLookupBuildBucket.Arn}/*
+        PolicyName: ConnectionLookupCleanupBucket
+  ConnectionLookupCleanupBucketFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              bucket_name = event['ResourceProperties']['BucketName']
+              s3 = boto3.resource('s3')
+              bucket = s3.Bucket(bucket_name)
+
+              try:
+                  if event['RequestType'] == 'Delete':
+                      # Delete all objects including versions
+                      bucket.object_versions.all().delete()
+                      bucket.objects.all().delete()
+
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+        - ConnectionLookupCleanupBucketRole
+        - Arn
+      Runtime: python3.9
+      Timeout: 900
+  ConnectionLookupCleanupBucket:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceTimeout: 960
+      ServiceToken:
+        Fn::GetAtt:
+        - ConnectionLookupCleanupBucketFunction
+        - Arn
+      BucketName:
+        Ref: ConnectionLookupBuildBucket
+  ConnectionLookupBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Location:
+          Ref: ConnectionLookupBuildBucket
+        Name: function-73cbe0e7c843165da8b748b46c9182974f4d5f66.zip
+        Packaging: ZIP
+        Type: S3
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+      ServiceRole:
+        Fn::GetAtt:
+        - ConnectionLookupBuildProjectRole
+        - Arn
+      Source:
+        Location: https://github.com/jamesward/cfn-connectionlookup-resource.git
+        Type: GITHUB
+      SourceVersion: 73cbe0e7c843165da8b748b46c9182974f4d5f66
+  ConnectionLookupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - codeconnections:GetSyncConfiguration
+            Resource:
+            - '*'
+          - Effect: Allow
+            Action:
+            - codeconnections:GetRepositoryLink
+            Resource:
+            - Fn::Sub: arn:aws:codeconnections:${AWS::Region}:${AWS::AccountId}:repository-link/*
+        PolicyName: ConnectionLookup
+  ConnectionLookupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket:
+          Ref: ConnectionLookupBuildBucket
+        S3Key: function-73cbe0e7c843165da8b748b46c9182974f4d5f66.zip
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+        - ConnectionLookupRole
+        - Arn
+      Runtime: python3.13
+      Timeout: 30
+    DependsOn:
+    - ConnectionLookupTriggerBuild
+  ConnectionLookup:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceTimeout: 90
+      ServiceToken:
+        Fn::GetAtt:
+        - ConnectionLookupFunction
+        - Arn
+      StackName:
+        Ref: AWS::StackName
+  asdftestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  asdftestOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: asdftest-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  asdftestIndexFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      AutoPublish: true
+      FunctionCode: |-
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          if (uri.endsWith('/')) {
+            request.uri += 'index.html';
+          } else if (!uri.includes('.')) {
+            request.uri += '/index.html';
+          }
+          return request;
+        }
+      FunctionConfig:
+        Comment: Directory index rewrite
+        Runtime: cloudfront-js-1.0
+      Name: asdftestIndex
+  asdftestDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - GET
+          - HEAD
+          CachedMethods:
+          - GET
+          - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+          FunctionAssociations:
+          - EventType: viewer-request
+            FunctionARN:
+              Fn::GetAtt:
+              - asdftestIndexFunction
+              - FunctionMetadata.FunctionARN
+          TargetOriginId: s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        Origins:
+        - DomainName:
+            Fn::GetAtt:
+            - asdftestBucket
+            - RegionalDomainName
+          Id: s3-origin
+          OriginAccessControlId:
+            Ref: asdftestOriginAccessControl
+          S3OriginConfig:
+            OriginAccessIdentity: ''
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+  asdftestBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: asdftestBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: cloudfront.amazonaws.com
+          Action: s3:GetObject
+          Resource:
+            Fn::Sub: ${asdftestBucket.Arn}/*
+          Condition:
+            StringEquals:
+              AWS:SourceArn:
+                Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${asdftestDistribution}
+  asdftestBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+          - Effect: Allow
+            Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+            - s3:ListBucket
+            Resource:
+            - Fn::Sub: ${asdftestBucket.Arn}
+            - Fn::Sub: ${asdftestBucket.Arn}/*
+          - Effect: Allow
+            Action:
+            - cloudfront:CreateInvalidation
+            Resource:
+              Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${asdftestDistribution}
+          - Effect: Allow
+            Action:
+            - codeconnections:GetConnectionToken
+            - codeconnections:GetConnection
+            - codeconnections:UseConnection
+            Resource:
+              Fn::GetAtt:
+              - ConnectionLookup
+              - ConnectionArn
+        PolicyName: Deploy
+  asdftestBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+        - Name: BUCKET
+          Value:
+            Ref: asdftestBucket
+        - Name: DISTRIBUTION_ID
+          Value:
+            Ref: asdftestDistribution
+        - Name: SITE_URL
+          Value:
+            Fn::GetAtt:
+            - asdftestDistribution
+            - DomainName
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+      ServiceRole:
+        Fn::GetAtt:
+        - asdftestBuildRole
+        - Arn
+      Source:
+        Auth:
+          Resource:
+            Fn::GetAtt:
+            - ConnectionLookup
+            - ConnectionArn
+          Type: CODECONNECTIONS
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            post_build:
+              commands:
+                - aws s3 sync ./ "s3://${BUCKET}/" --delete
+                - aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths '/*'
+        Location: https://github.com/jamesward-test/asdf.git
+        Type: GITHUB
+      SourceVersion: refs/heads/main
+      Triggers:
+        FilterGroups:
+        - - Type: EVENT
+            Pattern: PUSH
+          - Type: HEAD_REF
+            Pattern: ^refs/heads/main$
+        Webhook: true
+  asdftestTriggerBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - codebuild:StartBuild
+            - codebuild:BatchGetBuilds
+            Resource:
+            - Fn::GetAtt:
+              - asdftestBuildProject
+              - Arn
+        PolicyName: asdftestTriggerBuild
+  asdftestTriggerBuildFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import time
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] in ['Create', 'Update']:
+                      codebuild = boto3.client('codebuild')
+
+                      build = codebuild.start_build(
+                          projectName=event['ResourceProperties']['ProjectName']
+                      )
+
+                      build_id = build['build']['id']
+
+                      # Poll until complete or timeout
+                      while True:
+                          # Check remaining lambda execution time
+                          if context.get_remaining_time_in_millis() < 10000:  # 10 seconds buffer
+                              raise Exception("Lambda timeout approaching before build completion")
+
+                          response = codebuild.batch_get_builds(ids=[build_id])
+                          if not response['builds']:
+                              raise Exception(f"Build {build_id} not found")
+
+                          build_status = response['builds'][0]['buildStatus']
+
+                          if build_status == 'SUCCEEDED':
+                              response_data = {
+                                  'BuildId': build_id,
+                                  'Status': build_status
+                              }
+                              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                              return
+
+                          elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
+                              # Get the build logs URL and failure details
+                              logs = response['builds'][0].get('logs', {})
+                              log_url = logs.get('deepLink', 'No logs URL available')
+                              phase_details = next((phase for phase in response['builds'][0].get('phases', [])
+                                                    if phase.get('phaseStatus') == 'FAILED'), {})
+
+                              error_message = (
+                                  f"Build failed with status: {build_status}. "
+                                  f"Phase: {phase_details.get('phaseType', 'Unknown')}. "
+                                  f"Error: {phase_details.get('statusMessage', 'No error message available')}. "
+                                  f"Logs: {log_url}"
+                              )
+
+                              response_data = {
+                                  'BuildId': build_id,
+                                  'Status': build_status,
+                                  'Error': error_message
+                              }
+                              cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+                              return
+
+                          # Still in progress, wait before next check
+                          time.sleep(10)
+
+                  elif event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      'Error': str(e)
+                  })
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+        - asdftestTriggerBuildRole
+        - Arn
+      Runtime: python3.9
+      Timeout: 900
+  asdftestTriggerBuild:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceTimeout: 960
+      ServiceToken:
+        Fn::GetAtt:
+        - asdftestTriggerBuildFunction
+        - Arn
+      ProjectName:
+        Ref: asdftestBuildProject
+Outputs: {}

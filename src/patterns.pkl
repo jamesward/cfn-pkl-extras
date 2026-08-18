@@ -6,7 +6,13 @@ import "@cfn/aws/route53/hostedzone.pkl"
 import "@cfn/aws/cloudfront/distribution.pkl"
 import "@cfn/aws/cloudfront/function.pkl" as cloudfrontFunction
 import "@cfn/aws/certificatemanager/certificate.pkl"
+import "@cfn/aws/s3/bucket.pkl" as s3bucket
+import "@cfn/aws/s3/bucketpolicy.pkl" as s3bucketpolicy
+import "@cfn/aws/cloudfront/originaccesscontrol.pkl" as originaccesscontrol
+import "@cfn/aws/codebuild/project.pkl" as codebuildproject
+import "@cfn/aws/iam/role.pkl" as iamrole
 import "route53.pkl"
+import "customResources.pkl"
 
 
 // todo: must not start with a number?
@@ -45,11 +51,21 @@ class DomainDetails {
   /// Set explicitly to force a method — e.g. `DNS` when the domain already
   /// delegates to its Route 53 hosted zone even though a transfer is in flight.
   validationMethod: ValidationMethod?
+
+  /// Whether this domain results in a Route 53 hosted zone being created
+  /// (mirrors the branch logic in `Domains.apexDomainToResources`).
+  fixed createsHostedZone: Boolean = redirect != null || ghpages != null || !records.isEmpty
 }
 
 class ExternalDomainDetails {
   redirect: BasicRedirect?
+  staticSite: StaticSite?
   records: Listing<route53.DomainRecord>
+
+  /// Whether this domain results in a Route 53 hosted zone being created
+  /// (mirrors the branch logic in `ExternalDomains.apexDomainToResources`).
+  fixed createsHostedZone: Boolean =
+    redirect != null || !records.isEmpty || (staticSite?.customDomain ?? false)
 }
 
 class Domains {
@@ -131,7 +147,11 @@ class Domains {
 
 
   fixed resources: Mapping<ResourceName, cloudformation.Resource> = new Mapping<ResourceName, cloudformation.Resource> {
-    ...route53.domainCustomResource.resources
+    // The domain registration Lambda infra is only needed when there are
+    // actually domains to register.
+    when (!domains.isEmpty) {
+      ...route53.domainCustomResource.resources
+    }
 
     for (apexDomain, domainDetails in domains) {
       ...apexDomainToResources(apexDomain, domainDetails)
@@ -332,6 +352,311 @@ class WebSiteRedirect {
 }
 
 
+/// How the site is produced before publishing to S3. Closed set of strategies
+/// so a site is always exactly one known build type.
+abstract class SiteBuild {
+  /// Directory (relative to the repo root) synced to S3 after the build.
+  publishDir: String
+  /// Whether CodeBuild should fetch git submodules (e.g. a Hugo theme).
+  fetchSubmodules: Boolean = false
+  /// Commands run in the CodeBuild `build` phase. Empty means "no build".
+  buildCommands: Listing<String> = new Listing {}
+}
+
+/// No build step: the repository already contains the static files to serve
+/// (e.g. a plain `index.html`). The published directory is synced to S3 as-is.
+class StaticFiles extends SiteBuild {
+  /// Optional subdirectory (relative to the repo root) containing the files to
+  /// publish. Defaults to the repo root.
+  subdir: String?
+  publishDir = subdir ?? "."
+}
+
+/// Build a Hugo site and publish its `public/` output.
+class HugoBuild extends SiteBuild {
+  /// Hugo (extended) version installed in the build.
+  hugoVersion: String = "0.148.0"
+  fetchSubmodules = true
+  publishDir = "public"
+  buildCommands = new Listing {
+    "curl -sSL \"https://github.com/gohugoio/hugo/releases/download/v\(hugoVersion)/hugo_extended_\(hugoVersion)_linux-amd64.tar.gz\" | tar -xz -C /usr/local/bin hugo"
+    "hugo --gc --minify --baseURL \"https://${SITE_URL}/\""
+  }
+}
+
+/// A static website: a private S3 origin behind CloudFront (via Origin Access
+/// Control, not S3 website hosting), built and deployed by CodeBuild on push to
+/// `branch`. CodeBuild's GitHub source authenticates with the CodeConnections
+/// connection resolved by the `ConnectionLookup` custom resource (the same
+/// connection that deploys this stack via Git sync), so no connection ARN is
+/// hard-coded.
+class StaticSite {
+  /// The domain associated with this site. When used via `externalDomains` it
+  /// is injected from the apex key. Used for resource naming and, when
+  /// `customDomain` is true, for the ACM cert, CloudFront alias and Route 53
+  /// alias records.
+  domainName: route53.DomainName
+
+  /// GitHub "org/repo" the site content is built from.
+  githubRepo: String(split("/").length == 2)
+
+  /// Branch whose pushes trigger a build + deploy.
+  branch: String = "main"
+
+  /// When true, serve on `domainName` with an ACM certificate (DNS-validated
+  /// against a created hosted zone), a CloudFront alias and Route 53 alias
+  /// records. When false (default), serve on the CloudFront default domain
+  /// (`*.cloudfront.net`) with the default certificate - simplest for testing
+  /// since it needs no ACM validation or NS delegation.
+  customDomain: Boolean = false
+
+  /// How the site is built before publishing. Defaults to publishing the
+  /// repository's files as-is (no build step).
+  build: SiteBuild = new StaticFiles {}
+
+  fixed resourceName: ResourceName = domainName.resourceName
+  fixed apexResourceName: ResourceName = domainName.apexResourceName
+
+  // S3+OAC (unlike S3 website hosting) does not append an index document for
+  // directory requests, so a viewer-request function does the rewrite.
+  fixed indexFunctionCode: String = """
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+      if (uri.endsWith('/')) {
+        request.uri += 'index.html';
+      } else if (!uri.includes('.')) {
+        request.uri += '/index.html';
+      }
+      return request;
+    }
+    """
+
+  // Env vars (BUCKET, DISTRIBUTION_ID, HUGO_VERSION, SITE_URL) are injected by
+  // the CodeBuild project, so the buildspec stays free of resource ids.
+  // Env vars (BUCKET, DISTRIBUTION_ID, SITE_URL) are injected by the CodeBuild
+  // project, so the buildspec stays free of resource ids. The build phase is
+  // omitted entirely when the strategy has no build commands (StaticFiles).
+  fixed buildSpec: String = new Listing {
+    "version: 0.2"
+    "phases:"
+    when (!build.buildCommands.isEmpty) {
+      "  build:"
+      "    commands:"
+      for (cmd in build.buildCommands) {
+        "      - \(cmd)"
+      }
+    }
+    "  post_build:"
+    "    commands:"
+    "      - aws s3 sync \(build.publishDir)/ \"s3://${BUCKET}/\" --delete"
+    "      - aws cloudfront create-invalidation --distribution-id \"${DISTRIBUTION_ID}\" --paths '/*'"
+  }.join("\n")
+
+  fixed resources: Mapping<ResourceName, cloudformation.Resource> = new {
+    // Resolve the Git-sync CodeConnections ARN for this stack. These resources
+    // are identical regardless of how many static sites exist, so duplicate
+    // keys across sites collapse harmlessly.
+    ...route53.connectionLookupCustomResource.resources
+    ["ConnectionLookup"] = route53.connectionLookupCustomResource.instance(new Mapping {
+      ["StackName"] = cloudformation.Ref("AWS::StackName")
+    })
+
+    ["\(resourceName)Bucket"] = new s3bucket.Bucket {
+      PublicAccessBlockConfiguration {
+        BlockPublicAcls = true
+        BlockPublicPolicy = true
+        IgnorePublicAcls = true
+        RestrictPublicBuckets = true
+      }
+    }
+
+    ["\(resourceName)OriginAccessControl"] = new originaccesscontrol.OriginAccessControl {
+      OriginAccessControlConfig {
+        Name = "\(resourceName)-oac"
+        OriginAccessControlOriginType = "s3"
+        SigningBehavior = "always"
+        SigningProtocol = "sigv4"
+      }
+    }
+
+    ["\(resourceName)IndexFunction"] = new cloudfrontFunction.Function {
+      Name = "\(resourceName)Index"
+      AutoPublish = true
+      FunctionCode = indexFunctionCode
+      FunctionConfig {
+        Comment = "Directory index rewrite"
+        Runtime = "cloudfront-js-1.0"
+      }
+    }
+
+    ["\(resourceName)Distribution"] = new distribution.Distribution {
+      DistributionConfig {
+        Enabled = true
+        DefaultRootObject = "index.html"
+        HttpVersion = "http2"
+        DefaultCacheBehavior {
+          TargetOriginId = "s3-origin"
+          ViewerProtocolPolicy = "redirect-to-https"
+          Compress = true
+          AllowedMethods { "GET"; "HEAD" }
+          CachedMethods { "GET"; "HEAD" }
+          ForwardedValues { QueryString = false }
+          FunctionAssociations {
+            new {
+              EventType = "viewer-request"
+              FunctionARN = cloudformation.GetAtt("\(resourceName)IndexFunction", "FunctionMetadata.FunctionARN")
+            }
+          }
+        }
+        Origins {
+          new {
+            Id = "s3-origin"
+            DomainName = cloudformation.GetAtt("\(resourceName)Bucket", "RegionalDomainName")
+            OriginAccessControlId = cloudformation.Ref("\(resourceName)OriginAccessControl")
+            S3OriginConfig { OriginAccessIdentity = "" }
+          }
+        }
+        when (customDomain) {
+          Aliases { domainName.name }
+          ViewerCertificate {
+            AcmCertificateArn = cloudformation.Ref("\(apexResourceName)Certificate")
+            SslSupportMethod = "sni-only"
+            MinimumProtocolVersion = "TLSv1.2_2021"
+          }
+        }
+        when (!customDomain) {
+          ViewerCertificate {
+            CloudFrontDefaultCertificate = true
+          }
+        }
+      }
+    }
+
+    ["\(resourceName)BucketPolicy"] = new s3bucketpolicy.BucketPolicy {
+      Bucket = cloudformation.Ref("\(resourceName)Bucket")
+      PolicyDocument {
+        Version = "2012-10-17"
+        Statement {
+          new {
+            Effect = "Allow"
+            Principal { Service = "cloudfront.amazonaws.com" }
+            Action = "s3:GetObject"
+            Resource = cloudformation.Sub("${\(resourceName)Bucket.Arn}/*")
+            Condition {
+              StringEquals {
+                ["AWS:SourceArn"] = cloudformation.Sub("arn:aws:cloudfront::${AWS::AccountId}:distribution/${\(resourceName)Distribution}")
+              }
+            }
+          }
+        }
+      }
+    }
+
+    ["\(resourceName)BuildRole"] = new iamrole.Role {
+      AssumeRolePolicyDocument {
+        Version = "2012-10-17"
+        Statement {
+          Effect = "Allow"
+          Principal { Service = "codebuild.amazonaws.com" }
+          Action = "sts:AssumeRole"
+        }
+      }
+      Policies {
+        new {
+          PolicyName = "Deploy"
+          PolicyDocument {
+            Version = "2012-10-17"
+            Statement {
+              new {
+                Effect = "Allow"
+                Action { "logs:CreateLogGroup"; "logs:CreateLogStream"; "logs:PutLogEvents" }
+                Resource = cloudformation.Sub("arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*")
+              }
+              new {
+                Effect = "Allow"
+                Action { "s3:PutObject"; "s3:GetObject"; "s3:DeleteObject"; "s3:ListBucket" }
+                Resource {
+                  cloudformation.Sub("${\(resourceName)Bucket.Arn}")
+                  cloudformation.Sub("${\(resourceName)Bucket.Arn}/*")
+                }
+              }
+              new {
+                Effect = "Allow"
+                Action { "cloudfront:CreateInvalidation" }
+                Resource = cloudformation.Sub("arn:aws:cloudfront::${AWS::AccountId}:distribution/${\(resourceName)Distribution}")
+              }
+              new {
+                // Scoped to the resolved connection; lets CodeBuild use it as a source.
+                Effect = "Allow"
+                Action { "codeconnections:GetConnectionToken"; "codeconnections:GetConnection"; "codeconnections:UseConnection" }
+                Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
+              }
+            }
+          }
+        }
+      }
+    }
+
+    ["\(resourceName)BuildProject"] = new codebuildproject.Project {
+      ServiceRole = cloudformation.GetAtt("\(resourceName)BuildRole", "Arn")
+      Artifacts { Type = "NO_ARTIFACTS" }
+      Environment {
+        Type = "LINUX_CONTAINER"
+        ComputeType = "BUILD_GENERAL1_SMALL"
+        Image = "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
+        EnvironmentVariables {
+          new { Name = "BUCKET"; Value = cloudformation.Ref("\(resourceName)Bucket") }
+          new { Name = "DISTRIBUTION_ID"; Value = cloudformation.Ref("\(resourceName)Distribution") }
+          new { Name = "SITE_URL"; Value = if (customDomain) domainName.name else cloudformation.GetAtt("\(resourceName)Distribution", "DomainName") }
+        }
+      }
+      Source {
+        Type = "GITHUB"
+        Location = "https://github.com/\(githubRepo).git"
+        Auth {
+          Type = "CODECONNECTIONS"
+          Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
+        }
+        BuildSpec = buildSpec
+        when (build.fetchSubmodules) {
+          GitSubmodulesConfig { FetchSubmodules = true }
+        }
+      }
+      SourceVersion = "refs/heads/\(branch)"
+      Triggers {
+        Webhook = true
+        FilterGroups {
+          new {
+            new Mapping { ["Type"] = "EVENT"; ["Pattern"] = "PUSH" }
+            new Mapping { ["Type"] = "HEAD_REF"; ["Pattern"] = "^refs/heads/\(branch)$" }
+          }
+        }
+      }
+    }
+
+    // Publish on stack deploy: start the build and wait for it to finish, so
+    // the site is populated immediately rather than only on the next push.
+    ...customResources.triggerBuild("\(resourceName)TriggerBuild", "\(resourceName)BuildProject")
+
+    when (customDomain) {
+      ...route53.hostedZone(domainName)
+      ["\(apexResourceName)Certificate"] = new certificate.Certificate {
+        DomainName = domainName.name
+        ValidationMethod = "DNS"
+        DomainValidationOptions {
+          new {
+            DomainName = domainName.name
+            HostedZoneId = cloudformation.Ref("\(apexResourceName)HostedZone")
+          }
+        }
+      }
+      ...distributionRecordSets(domainName)
+    }
+  }
+}
+
+
 class ExternalDomains {
 
   domains: Mapping<route53.ApexDomainName, ExternalDomainDetails>
@@ -346,6 +671,20 @@ class ExternalDomains {
           redirect = externalDomainDetails.redirect
           validationMethod = "DNS"
         }.resources
+        when (!externalDomainDetails.records.isEmpty) {
+          ...route53.domainRecords(apexDomain, externalDomainDetails.records)
+        }
+      }
+    else if (externalDomainDetails.staticSite != null)
+      new {
+        // Inject the domain from the apex key so the site doesn't repeat it.
+        ...(externalDomainDetails.staticSite!!) {
+          domainName {
+            name = apexDomain
+          }
+        }.resources
+        // Extra records only make sense alongside a custom-domain site (which
+        // creates the hosted zone they attach to).
         when (!externalDomainDetails.records.isEmpty) {
           ...route53.domainRecords(apexDomain, externalDomainDetails.records)
         }

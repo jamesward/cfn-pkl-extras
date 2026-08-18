@@ -1,0 +1,10 @@
+amends "pkl:Project"
+
+dependencies {
+  ["cfn"] {
+    uri = "package://pkg.pkl-lang.org/github.com/aws-cloudformation/cloudformation-pkl/cloudformation@0.1.7"
+  }
+  // Use the local source (with the StaticSite pattern) rather than a published
+  // release, so the example tracks in-repo changes.
+  ["cfn-pkl-extras"] = import("../src/PklProject")
+}

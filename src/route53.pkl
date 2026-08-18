@@ -68,6 +68,45 @@ const domainCustomResource = new customResources.CustomResource {
   }
 }
 
+// Resolves the CodeConnections ARN that CloudFormation Git sync uses to deploy
+// a given stack. This breaks the chicken-and-egg where a stack wants to reuse
+// the very connection that deploys it (e.g. to drive a CodeBuild deploy) but
+// CloudFormation has no native way to turn a connection into an ARN.
+// Backed by github.com/jamesward/cfn-connectionlookup-resource.
+const connectionLookupCustomResource = new customResources.CustomResource {
+  resourceName = "ConnectionLookup"
+  source = new customResources.Repo {
+    runtime = "python3.13"
+    handler = "index.handler"
+    timeout = 30.s
+    gitHubOrgRepo = "jamesward/cfn-connectionlookup-resource"
+    commit = "73cbe0e7c843165da8b748b46c9182974f4d5f66"
+  }
+  allow {
+    new customResources.Allow {
+      // GetSyncConfiguration has no resource-level permissions (no resource
+      // type in the service authorization reference), so it must be "*".
+      actions {
+        "codeconnections:GetSyncConfiguration"
+      }
+      resource {
+        "*"
+      }
+    }
+    new customResources.Allow {
+      // GetRepositoryLink operates on the RepositoryLink resource type, so it
+      // is scoped to repository links in this account and region.
+      actions {
+        "codeconnections:GetRepositoryLink"
+      }
+      resource {
+        cloudformation.Sub("arn:aws:codeconnections:${AWS::Region}:${AWS::AccountId}:repository-link/*")
+      }
+    }
+  }
+  managedPolicyArns {}
+}
+
 class Domain {
   domainName: DomainName
   contact: Contact
@@ -121,16 +160,18 @@ hostedZoneCustomResource = new customResources.CustomResource {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
   }
   allow {
-    actions {
-      "route53:GetHostedZone"
-      "route53:ListResourceRecordSets"
-      "route53:ChangeResourceRecordSets"
-      "route53:DeleteHostedZone"
-      "route53domains:UpdateDomainNameservers"
-    }
-    resource {
-      // todo: need Sub?
-      cloudformation.Sub("arn:aws:route53:::hostedzone/*")
+    new customResources.Allow {
+      actions {
+        "route53:GetHostedZone"
+        "route53:ListResourceRecordSets"
+        "route53:ChangeResourceRecordSets"
+        "route53:DeleteHostedZone"
+        "route53domains:UpdateDomainNameservers"
+      }
+      resource {
+        // todo: need Sub?
+        cloudformation.Sub("arn:aws:route53:::hostedzone/*")
+      }
     }
   }
 }

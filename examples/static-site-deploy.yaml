@@ -1,0 +1,4 @@
+# CloudFormation Git sync deployment file for the static-site example.
+# Point the stack's Git sync at this file. `template-file-path` is relative to
+# the repository root.
+template-file-path: examples/static-site.yaml
