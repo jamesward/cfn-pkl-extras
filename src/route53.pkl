@@ -67,15 +67,11 @@ const domainCustomResource = new customResources.CustomResource {
 }
 
 // Resolves the CodeConnections ARN that CloudFormation Git sync uses to deploy
-// a given stack. This breaks the chicken-and-egg where a stack wants to reuse
-// the very connection that deploys it (e.g. to drive a CodeBuild deploy) but
-// CloudFormation has no native way to turn a connection into an ARN.
-// Resolves the CodeConnections ARN that CloudFormation Git sync uses to deploy
 // this stack, via two AWS SDK calls (no bespoke Lambda, no build): the deploying
 // stack name -> get_sync_configuration -> RepositoryLinkId -> get_repository_link
 // -> ConnectionArn. Emitted once per template so multiple StaticSites share a
-// single invoker + ConnectionLookup. Consumers read the ARN with
-// Fn::GetAtt [ConnectionLookup, "RepositoryLinkInfo.ConnectionArn"].
+// single invoker + lookup. Consumers read the ARN with
+// Fn::GetAtt [ConnectionLink, "RepositoryLinkInfo.ConnectionArn"].
 function connectionLookupResources(): Mapping<patterns.ResourceName, cloudformation.Resource> =
   let (invoker = customResources.sdkCall(new Listing {
     new customResources.Allow {
@@ -101,7 +97,7 @@ function connectionLookupResources(): Mapping<patterns.ResourceName, cloudformat
         }
       })
       // RepositoryLinkId -> ConnectionArn (also the physical id)
-      ["ConnectionLookup"] = invoker.instance(new Mapping {
+      ["ConnectionLink"] = invoker.instance(new Mapping {
         ["Service"] = "codeconnections"
         ["Action"] = "get_repository_link"
         ["Parameters"] = new Mapping {
