@@ -459,7 +459,7 @@ Resources:
           phases:
             post_build:
               commands:
-                - aws s3 sync ./ "s3://${BUCKET}/" --delete
+                - aws s3 sync ./ "s3://${BUCKET}/" --delete --exclude '.git/*'
                 - aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths '/*'
         Location: https://github.com/jamesward-test/asdf.git
         Type: GITHUB
