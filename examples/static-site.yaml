@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: 2010-09-09
 Resources:
-  SdkCallRole:
+  ConnectionLookupRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -18,101 +18,37 @@ Resources:
           - Effect: Allow
             Action:
             - codeconnections:GetSyncConfiguration
+            - codeconnections:GetRepositoryLink
+            - codestar-connections:GetSyncConfiguration
+            - codestar-connections:GetRepositoryLink
             Resource:
             - '*'
-          - Effect: Allow
-            Action:
-            - codeconnections:GetRepositoryLink
-            Resource:
-            - Fn::Sub: arn:aws:codeconnections:${AWS::Region}:${AWS::AccountId}:repository-link/*
-        PolicyName: SdkCall
-  SdkCallFunction:
+        PolicyName: ConnectionLookup
+  ConnectionLookupFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Code:
-        ZipFile: |
-          import boto3
-          import cfnresponse
-
-
-          # Flatten a nested response into dot-notation keys, e.g.
-          # {"A": {"B": "x"}} -> {"A.B": "x"}. CloudFormation custom-resource Fn::GetAtt
-          # does a flat key lookup (it can't traverse nested JSON), so the dot key becomes
-          # the attribute name: Fn::GetAtt [Resource, "A.B"].
-          def flatten(obj, prefix, out):
-              if isinstance(obj, dict):
-                  for k, v in obj.items():
-                      flatten(v, prefix + k + ".", out)
-              elif isinstance(obj, list):
-                  for i, v in enumerate(obj):
-                      flatten(v, prefix + str(i) + ".", out)
-              else:
-                  out[prefix[:-1]] = obj if isinstance(obj, str) else str(obj)
-
-
-          def dig(obj, path):
-              for part in path.split("."):
-                  obj = obj[int(part)] if isinstance(obj, list) else obj[part]
-              return obj
-
-
-          def handler(event, context):
-              try:
-                  if event["RequestType"] == "Delete":
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {},
-                                       physicalResourceId=event.get("PhysicalResourceId"))
-                      return
-                  props = event["ResourceProperties"]
-                  client = boto3.client(props["Service"])
-                  response = getattr(client, props["Action"])(**props.get("Parameters", {}))
-                  response.pop("ResponseMetadata", None)
-                  data = {}
-                  flatten(response, "", data)
-                  id_path = props.get("PhysicalResourceIdPath")
-                  physical_id = dig(response, id_path) if id_path \
-                      else event.get("PhysicalResourceId") or event["LogicalResourceId"]
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, data,
-                                   physicalResourceId=str(physical_id))
-              except Exception as e:
-                  print("Error:", e)
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
-      Handler: index.handler
+      Runtime: python3.13
+      Handler: cfn_extras.connection_lookup.handler
+      Timeout: 60
       Role:
         Fn::GetAtt:
-        - SdkCallRole
+        - ConnectionLookupRole
         - Arn
-      Runtime: python3.13
-      Timeout: 60
-  ConnectionSyncConfig:
+      Code:
+        S3Bucket: cfn-extras-resource
+        S3Key: cfn-extras-resource.zip
+        S3ObjectVersion: gpucdYhAHtURnEC1jLVSotYBtr5h6A56
+        S3ObjectStorageMode: REFERENCE
+  ConnectionLookup:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceTimeout: 120
       ServiceToken:
         Fn::GetAtt:
-        - SdkCallFunction
+        - ConnectionLookupFunction
         - Arn
-      Service: codeconnections
-      Action: get_sync_configuration
-      Parameters:
-        SyncType: CFN_STACK_SYNC
-        ResourceName:
-          Ref: AWS::StackName
-  ConnectionLink:
-    Type: AWS::CloudFormation::CustomResource
-    Properties:
-      ServiceTimeout: 120
-      ServiceToken:
-        Fn::GetAtt:
-        - SdkCallFunction
-        - Arn
-      Service: codeconnections
-      Action: get_repository_link
-      Parameters:
-        RepositoryLinkId:
-          Fn::GetAtt:
-          - ConnectionSyncConfig
-          - SyncConfiguration.RepositoryLinkId
-      PhysicalResourceIdPath: RepositoryLinkInfo.ConnectionArn
+      StackName:
+        Ref: AWS::StackName
   asdftestBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -255,8 +191,8 @@ Resources:
             - codeconnections:UseConnection
             Resource:
               Fn::GetAtt:
-              - ConnectionLink
-              - RepositoryLinkInfo.ConnectionArn
+              - ConnectionLookup
+              - ConnectionArn
         PolicyName: Deploy
   asdftestBuildProject:
     Type: AWS::CodeBuild::Project
@@ -287,8 +223,8 @@ Resources:
         Auth:
           Resource:
             Fn::GetAtt:
-            - ConnectionLink
-            - RepositoryLinkInfo.ConnectionArn
+            - ConnectionLookup
+            - ConnectionArn
           Type: CODECONNECTIONS
         BuildSpec: |-
           version: 0.2
@@ -334,83 +270,18 @@ Resources:
   asdftestTriggerBuildFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Code:
-        ZipFile: |
-          import boto3
-          import cfnresponse
-          import time
-
-          def handler(event, context):
-              try:
-                  if event['RequestType'] in ['Create', 'Update']:
-                      codebuild = boto3.client('codebuild')
-
-                      build = codebuild.start_build(
-                          projectName=event['ResourceProperties']['ProjectName']
-                      )
-
-                      build_id = build['build']['id']
-
-                      # Poll until complete or timeout
-                      while True:
-                          # Check remaining lambda execution time
-                          if context.get_remaining_time_in_millis() < 10000:  # 10 seconds buffer
-                              raise Exception("Lambda timeout approaching before build completion")
-
-                          response = codebuild.batch_get_builds(ids=[build_id])
-                          if not response['builds']:
-                              raise Exception(f"Build {build_id} not found")
-
-                          build_status = response['builds'][0]['buildStatus']
-
-                          if build_status == 'SUCCEEDED':
-                              response_data = {
-                                  'BuildId': build_id,
-                                  'Status': build_status
-                              }
-                              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
-                              return
-
-                          elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
-                              # Get the build logs URL and failure details
-                              logs = response['builds'][0].get('logs', {})
-                              log_url = logs.get('deepLink', 'No logs URL available')
-                              phase_details = next((phase for phase in response['builds'][0].get('phases', [])
-                                                    if phase.get('phaseStatus') == 'FAILED'), {})
-
-                              error_message = (
-                                  f"Build failed with status: {build_status}. "
-                                  f"Phase: {phase_details.get('phaseType', 'Unknown')}. "
-                                  f"Error: {phase_details.get('statusMessage', 'No error message available')}. "
-                                  f"Logs: {log_url}"
-                              )
-
-                              response_data = {
-                                  'BuildId': build_id,
-                                  'Status': build_status,
-                                  'Error': error_message
-                              }
-                              cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
-                              return
-
-                          # Still in progress, wait before next check
-                          time.sleep(10)
-
-                  elif event['RequestType'] == 'Delete':
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-
-              except Exception as e:
-                  print(f"Error: {str(e)}")
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {
-                      'Error': str(e)
-                  })
-      Handler: index.handler
+      Runtime: python3.13
+      Handler: cfn_extras.trigger_build.handler
+      Timeout: 900
       Role:
         Fn::GetAtt:
         - asdftestTriggerBuildRole
         - Arn
-      Runtime: python3.9
-      Timeout: 900
+      Code:
+        S3Bucket: cfn-extras-resource
+        S3Key: cfn-extras-resource.zip
+        S3ObjectVersion: gpucdYhAHtURnEC1jLVSotYBtr5h6A56
+        S3ObjectStorageMode: REFERENCE
   asdftestTriggerBuild:
     Type: AWS::CloudFormation::CustomResource
     Properties:
@@ -553,8 +424,8 @@ Resources:
             - codeconnections:UseConnection
             Resource:
               Fn::GetAtt:
-              - ConnectionLink
-              - RepositoryLinkInfo.ConnectionArn
+              - ConnectionLookup
+              - ConnectionArn
         PolicyName: Deploy
   hellohugotestBuildProject:
     Type: AWS::CodeBuild::Project
@@ -585,8 +456,8 @@ Resources:
         Auth:
           Resource:
             Fn::GetAtt:
-            - ConnectionLink
-            - RepositoryLinkInfo.ConnectionArn
+            - ConnectionLookup
+            - ConnectionArn
           Type: CODECONNECTIONS
         BuildSpec: |-
           version: 0.2
@@ -638,83 +509,18 @@ Resources:
   hellohugotestTriggerBuildFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Code:
-        ZipFile: |
-          import boto3
-          import cfnresponse
-          import time
-
-          def handler(event, context):
-              try:
-                  if event['RequestType'] in ['Create', 'Update']:
-                      codebuild = boto3.client('codebuild')
-
-                      build = codebuild.start_build(
-                          projectName=event['ResourceProperties']['ProjectName']
-                      )
-
-                      build_id = build['build']['id']
-
-                      # Poll until complete or timeout
-                      while True:
-                          # Check remaining lambda execution time
-                          if context.get_remaining_time_in_millis() < 10000:  # 10 seconds buffer
-                              raise Exception("Lambda timeout approaching before build completion")
-
-                          response = codebuild.batch_get_builds(ids=[build_id])
-                          if not response['builds']:
-                              raise Exception(f"Build {build_id} not found")
-
-                          build_status = response['builds'][0]['buildStatus']
-
-                          if build_status == 'SUCCEEDED':
-                              response_data = {
-                                  'BuildId': build_id,
-                                  'Status': build_status
-                              }
-                              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
-                              return
-
-                          elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
-                              # Get the build logs URL and failure details
-                              logs = response['builds'][0].get('logs', {})
-                              log_url = logs.get('deepLink', 'No logs URL available')
-                              phase_details = next((phase for phase in response['builds'][0].get('phases', [])
-                                                    if phase.get('phaseStatus') == 'FAILED'), {})
-
-                              error_message = (
-                                  f"Build failed with status: {build_status}. "
-                                  f"Phase: {phase_details.get('phaseType', 'Unknown')}. "
-                                  f"Error: {phase_details.get('statusMessage', 'No error message available')}. "
-                                  f"Logs: {log_url}"
-                              )
-
-                              response_data = {
-                                  'BuildId': build_id,
-                                  'Status': build_status,
-                                  'Error': error_message
-                              }
-                              cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
-                              return
-
-                          # Still in progress, wait before next check
-                          time.sleep(10)
-
-                  elif event['RequestType'] == 'Delete':
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-
-              except Exception as e:
-                  print(f"Error: {str(e)}")
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {
-                      'Error': str(e)
-                  })
-      Handler: index.handler
+      Runtime: python3.13
+      Handler: cfn_extras.trigger_build.handler
+      Timeout: 900
       Role:
         Fn::GetAtt:
         - hellohugotestTriggerBuildRole
         - Arn
-      Runtime: python3.9
-      Timeout: 900
+      Code:
+        S3Bucket: cfn-extras-resource
+        S3Key: cfn-extras-resource.zip
+        S3ObjectVersion: gpucdYhAHtURnEC1jLVSotYBtr5h6A56
+        S3ObjectStorageMode: REFERENCE
   hellohugotestTriggerBuild:
     Type: AWS::CloudFormation::CustomResource
     Properties:

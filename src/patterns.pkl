@@ -434,7 +434,7 @@ class PrefixRedirect extends SiteRedirect {
 /// A static website: a private S3 origin behind CloudFront (via Origin Access
 /// Control, not S3 website hosting), built and deployed by CodeBuild on push to
 /// `branch`. CodeBuild's GitHub source authenticates with the CodeConnections
-/// connection resolved by the `ConnectionLink` custom resource (the same
+/// connection resolved by the `ConnectionLookup` custom resource (the same
 /// connection that deploys this stack via Git sync), so no connection ARN is
 /// hard-coded.
 class StaticSite {
@@ -676,7 +676,7 @@ class StaticSite {
                 // Scoped to the resolved connection; lets CodeBuild use it as a source.
                 Effect = "Allow"
                 Action { "codeconnections:GetConnectionToken"; "codeconnections:GetConnection"; "codeconnections:UseConnection" }
-                Resource = cloudformation.GetAtt("ConnectionLink", "RepositoryLinkInfo.ConnectionArn")
+                Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
               }
             }
           }
@@ -702,7 +702,7 @@ class StaticSite {
         Location = "https://github.com/\(githubRepo).git"
         Auth {
           Type = "CODECONNECTIONS"
-          Resource = cloudformation.GetAtt("ConnectionLink", "RepositoryLinkInfo.ConnectionArn")
+          Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
         }
         BuildSpec = buildSpec
         when (build.fetchSubmodules) {
