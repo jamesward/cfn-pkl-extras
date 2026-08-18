@@ -384,6 +384,30 @@ class HugoBuild extends SiteBuild {
   }
 }
 
+/// A path redirect served by the site's CloudFront viewer-request function.
+/// Closed set: a request path either matches exactly or by prefix.
+abstract class SiteRedirect {
+  /// Destination: an absolute path ("/foo") or an absolute URL
+  /// ("https://example.com/..."). For PrefixRedirect, `{path}` is replaced with
+  /// the part of the request path after `prefix`.
+  to: String
+  /// 301 Moved Permanently (default) or 302 Found.
+  permanent: Boolean = true
+  fixed statusCode: Int = if (permanent) 301 else 302
+  fixed statusDescription: String = if (permanent) "Moved Permanently" else "Found"
+}
+
+/// Redirects when the request path exactly equals one of `paths`.
+class ExactRedirect extends SiteRedirect {
+  paths: Listing<String>(!isEmpty)
+}
+
+/// Redirects when the request path starts with `prefix`; the remainder after
+/// `prefix` is substituted for `{path}` in `to`.
+class PrefixRedirect extends SiteRedirect {
+  prefix: String
+}
+
 /// A static website: a private S3 origin behind CloudFront (via Origin Access
 /// Control, not S3 website hosting), built and deployed by CodeBuild on push to
 /// `branch`. CodeBuild's GitHub source authenticates with the CodeConnections
@@ -414,23 +438,46 @@ class StaticSite {
   /// repository's files as-is (no build step).
   build: SiteBuild = new StaticFiles {}
 
+  /// Path redirects served by the CloudFront viewer-request function (checked
+  /// before the directory-index rewrite).
+  redirects: Listing<SiteRedirect> = new Listing {}
+
   fixed resourceName: ResourceName = domainName.resourceName
   fixed apexResourceName: ResourceName = domainName.apexResourceName
 
-  // S3+OAC (unlike S3 website hosting) does not append an index document for
-  // directory requests, so a viewer-request function does the rewrite.
-  fixed indexFunctionCode: String = """
-    function handler(event) {
-      var request = event.request;
-      var uri = request.uri;
-      if (uri.endsWith('/')) {
-        request.uri += 'index.html';
-      } else if (!uri.includes('.')) {
-        request.uri += '/index.html';
+  // A single viewer-request function handles path redirects first, then the
+  // directory-index rewrite (S3+OAC, unlike S3 website hosting, does not append
+  // an index document for directory requests).
+  fixed indexFunctionCode: String = new Listing {
+    "function handler(event) {"
+    "  var request = event.request;"
+    "  var uri = request.uri;"
+    for (r in redirects) {
+      when (r is ExactRedirect) {
+        "  if (\(r.paths.toList().map((p) -> "uri === '\(p)'").join(" || "))) {"
+        "    return { statusCode: \(r.statusCode), statusDescription: '\(r.statusDescription)', headers: { location: { value: '\(r.to)' } } };"
+        "  }"
       }
-      return request;
+      when (r is PrefixRedirect) {
+        "  if (uri.startsWith('\(r.prefix)')) {"
+        when (r.to.contains("{path}")) {
+          "    var rest = uri.substring(\(r.prefix.length));"
+          "    return { statusCode: \(r.statusCode), statusDescription: '\(r.statusDescription)', headers: { location: { value: '\(r.to.replaceAll("{path}", "' + rest + '"))' } } };"
+        }
+        when (!r.to.contains("{path}")) {
+          "    return { statusCode: \(r.statusCode), statusDescription: '\(r.statusDescription)', headers: { location: { value: '\(r.to)' } } };"
+        }
+        "  }"
+      }
     }
-    """
+    "  if (uri.endsWith('/')) {"
+    "    request.uri += 'index.html';"
+    "  } else if (!uri.includes('.')) {"
+    "    request.uri += '/index.html';"
+    "  }"
+    "  return request;"
+    "}"
+  }.join("\n")
 
   // Env vars (BUCKET, DISTRIBUTION_ID, HUGO_VERSION, SITE_URL) are injected by
   // the CodeBuild project, so the buildspec stays free of resource ids.

@@ -311,6 +311,16 @@ Resources:
         function handler(event) {
           var request = event.request;
           var uri = request.uri;
+          if (uri === '/old' || uri === '/legacy') {
+            return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: '/' } } };
+          }
+          if (uri === '/gh') {
+            return { statusCode: 302, statusDescription: 'Found', headers: { location: { value: 'https://github.com/jamesward-test/asdf' } } };
+          }
+          if (uri.startsWith('/docs/')) {
+            var rest = uri.substring(6);
+            return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: '/' + rest + '' } } };
+          }
           if (uri.endsWith('/')) {
             request.uri += 'index.html';
           } else if (!uri.includes('.')) {

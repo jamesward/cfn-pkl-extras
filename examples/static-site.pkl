@@ -40,10 +40,19 @@ externalDomains {
   // `.test` is a reserved TLD; the key is only used for resource naming since
   // customDomain is false (the site is served on the CloudFront domain).
 
-  // 1) A plain static-files site (repo already contains index.html; no build).
+  // 1) A plain static-files site (repo already contains index.html; no build),
+  //    with a few path redirects handled by the CloudFront function.
   ["asdf.test"] {
     staticSite {
       githubRepo = "jamesward-test/asdf"
+      redirects {
+        // exact path -> absolute path (301)
+        new patterns.ExactRedirect { paths { "/old"; "/legacy" }; to = "/" }
+        // exact path -> external URL (302)
+        new patterns.ExactRedirect { paths { "/gh" }; to = "https://github.com/jamesward-test/asdf"; permanent = false }
+        // prefix rewrite: /docs/x -> /x (301), {path} = the part after the prefix
+        new patterns.PrefixRedirect { prefix = "/docs/"; to = "/{path}" }
+      }
     }
   }
 
