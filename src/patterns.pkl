@@ -454,14 +454,6 @@ class StaticSite {
   }.join("\n")
 
   fixed resources: Mapping<ResourceName, cloudformation.Resource> = new {
-    // Resolve the Git-sync CodeConnections ARN for this stack. These resources
-    // are identical regardless of how many static sites exist, so duplicate
-    // keys across sites collapse harmlessly.
-    ...route53.connectionLookupCustomResource.resources
-    ["ConnectionLookup"] = route53.connectionLookupCustomResource.instance(new Mapping {
-      ["StackName"] = cloudformation.Ref("AWS::StackName")
-    })
-
     ["\(resourceName)Bucket"] = new s3bucket.Bucket {
       PublicAccessBlockConfiguration {
         BlockPublicAcls = true

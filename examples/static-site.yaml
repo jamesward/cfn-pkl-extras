@@ -585,4 +585,308 @@ Resources:
         - Arn
       ProjectName:
         Ref: asdftestBuildProject
+  hellohugotestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  hellohugotestOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: hellohugotest-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  hellohugotestIndexFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      AutoPublish: true
+      FunctionCode: |-
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          if (uri.endsWith('/')) {
+            request.uri += 'index.html';
+          } else if (!uri.includes('.')) {
+            request.uri += '/index.html';
+          }
+          return request;
+        }
+      FunctionConfig:
+        Comment: Directory index rewrite
+        Runtime: cloudfront-js-1.0
+      Name: hellohugotestIndex
+  hellohugotestDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - GET
+          - HEAD
+          CachedMethods:
+          - GET
+          - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+          FunctionAssociations:
+          - EventType: viewer-request
+            FunctionARN:
+              Fn::GetAtt:
+              - hellohugotestIndexFunction
+              - FunctionMetadata.FunctionARN
+          TargetOriginId: s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        Origins:
+        - DomainName:
+            Fn::GetAtt:
+            - hellohugotestBucket
+            - RegionalDomainName
+          Id: s3-origin
+          OriginAccessControlId:
+            Ref: hellohugotestOriginAccessControl
+          S3OriginConfig:
+            OriginAccessIdentity: ''
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+  hellohugotestBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: hellohugotestBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: cloudfront.amazonaws.com
+          Action: s3:GetObject
+          Resource:
+            Fn::Sub: ${hellohugotestBucket.Arn}/*
+          Condition:
+            StringEquals:
+              AWS:SourceArn:
+                Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${hellohugotestDistribution}
+  hellohugotestBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+          - Effect: Allow
+            Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+            - s3:ListBucket
+            Resource:
+            - Fn::Sub: ${hellohugotestBucket.Arn}
+            - Fn::Sub: ${hellohugotestBucket.Arn}/*
+          - Effect: Allow
+            Action:
+            - cloudfront:CreateInvalidation
+            Resource:
+              Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${hellohugotestDistribution}
+          - Effect: Allow
+            Action:
+            - codeconnections:GetConnectionToken
+            - codeconnections:GetConnection
+            - codeconnections:UseConnection
+            Resource:
+              Fn::GetAtt:
+              - ConnectionLookup
+              - ConnectionArn
+        PolicyName: Deploy
+  hellohugotestBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+        - Name: BUCKET
+          Value:
+            Ref: hellohugotestBucket
+        - Name: DISTRIBUTION_ID
+          Value:
+            Ref: hellohugotestDistribution
+        - Name: SITE_URL
+          Value:
+            Fn::GetAtt:
+            - hellohugotestDistribution
+            - DomainName
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+      ServiceRole:
+        Fn::GetAtt:
+        - hellohugotestBuildRole
+        - Arn
+      Source:
+        Auth:
+          Resource:
+            Fn::GetAtt:
+            - ConnectionLookup
+            - ConnectionArn
+          Type: CODECONNECTIONS
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - curl -sSL "https://github.com/gohugoio/hugo/releases/download/v0.148.0/hugo_extended_0.148.0_linux-amd64.tar.gz" | tar -xz -C /usr/local/bin hugo
+                - hugo --gc --minify --baseURL "https://${SITE_URL}/"
+            post_build:
+              commands:
+                - aws s3 sync public/ "s3://${BUCKET}/" --delete --exclude '.git/*'
+                - aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths '/*'
+        GitSubmodulesConfig:
+          FetchSubmodules: true
+        Location: https://github.com/jamesward-test/hello-hugo.git
+        Type: GITHUB
+      SourceVersion: refs/heads/main
+      Triggers:
+        FilterGroups:
+        - - Type: EVENT
+            Pattern: PUSH
+          - Type: HEAD_REF
+            Pattern: ^refs/heads/main$
+        Webhook: true
+  hellohugotestTriggerBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - codebuild:StartBuild
+            - codebuild:BatchGetBuilds
+            Resource:
+            - Fn::GetAtt:
+              - hellohugotestBuildProject
+              - Arn
+        PolicyName: hellohugotestTriggerBuild
+  hellohugotestTriggerBuildFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import time
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] in ['Create', 'Update']:
+                      codebuild = boto3.client('codebuild')
+
+                      build = codebuild.start_build(
+                          projectName=event['ResourceProperties']['ProjectName']
+                      )
+
+                      build_id = build['build']['id']
+
+                      # Poll until complete or timeout
+                      while True:
+                          # Check remaining lambda execution time
+                          if context.get_remaining_time_in_millis() < 10000:  # 10 seconds buffer
+                              raise Exception("Lambda timeout approaching before build completion")
+
+                          response = codebuild.batch_get_builds(ids=[build_id])
+                          if not response['builds']:
+                              raise Exception(f"Build {build_id} not found")
+
+                          build_status = response['builds'][0]['buildStatus']
+
+                          if build_status == 'SUCCEEDED':
+                              response_data = {
+                                  'BuildId': build_id,
+                                  'Status': build_status
+                              }
+                              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                              return
+
+                          elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
+                              # Get the build logs URL and failure details
+                              logs = response['builds'][0].get('logs', {})
+                              log_url = logs.get('deepLink', 'No logs URL available')
+                              phase_details = next((phase for phase in response['builds'][0].get('phases', [])
+                                                    if phase.get('phaseStatus') == 'FAILED'), {})
+
+                              error_message = (
+                                  f"Build failed with status: {build_status}. "
+                                  f"Phase: {phase_details.get('phaseType', 'Unknown')}. "
+                                  f"Error: {phase_details.get('statusMessage', 'No error message available')}. "
+                                  f"Logs: {log_url}"
+                              )
+
+                              response_data = {
+                                  'BuildId': build_id,
+                                  'Status': build_status,
+                                  'Error': error_message
+                              }
+                              cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+                              return
+
+                          # Still in progress, wait before next check
+                          time.sleep(10)
+
+                  elif event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      'Error': str(e)
+                  })
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+        - hellohugotestTriggerBuildRole
+        - Arn
+      Runtime: python3.9
+      Timeout: 900
+  hellohugotestTriggerBuild:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceTimeout: 960
+      ServiceToken:
+        Fn::GetAtt:
+        - hellohugotestTriggerBuildFunction
+        - Arn
+      ProjectName:
+        Ref: hellohugotestBuildProject
 Outputs: {}

@@ -25,16 +25,33 @@
 ///     configuration + CodeConnections connection exist to resolve)
 ///   - that connection's GitHub App installation has access to the
 ///     `jamesward-test/asdf` repository
+/// Example: two static sites served through CloudFront in one stack, with no
+/// domain registration. Uses `externalDomains` so nothing is registered, and
+/// `customDomain` is left false so each site is served on its CloudFront
+/// domain. Both publish on stack deploy and re-sync on every push to `main`.
+///
+/// Prerequisites to deploy: this stack is deployed via CloudFormation Git sync,
+/// and the connection's GitHub App can access both source repos.
 amends "@cfn-pkl-extras/template.pkl"
 
-// No `contact` and no `registeredDomains` needed: this stack only uses
-// externalDomains, so nothing is registered with a registrar.
+import "@cfn-pkl-extras/patterns.pkl"
+
 externalDomains {
   // `.test` is a reserved TLD; the key is only used for resource naming since
   // customDomain is false (the site is served on the CloudFront domain).
+
+  // 1) A plain static-files site (repo already contains index.html; no build).
   ["asdf.test"] {
     staticSite {
       githubRepo = "jamesward-test/asdf"
+    }
+  }
+
+  // 2) A Hugo site (CodeBuild installs Hugo, builds, publishes public/).
+  ["hellohugo.test"] {
+    staticSite {
+      githubRepo = "jamesward-test/hello-hugo"
+      build = new patterns.HugoBuild {}
     }
   }
 }

@@ -25,6 +25,11 @@ fixed cloudFormation: cloudformationTemplate =
     registeredDomains.toMap().values.any((d) -> d.createsHostedZone)
       || externalDomains.toMap().values.any((d) -> d.createsHostedZone)
   )
+  // The connection-lookup resources are shared by all StaticSites, so emit them
+  // once when any externalDomain has a staticSite.
+  let (_needsConnectionLookup =
+    externalDomains.toMap().values.any((d) -> d.staticSite != null)
+  )
   let (domains = new patterns.Domains {
     contact = _contact
     domains = registeredDomains
@@ -37,6 +42,9 @@ fixed cloudFormation: cloudformationTemplate =
     Resources {
       when (_needsHostedZone) {
         ...route53.hostedZoneCustomResource.resources
+      }
+      when (_needsConnectionLookup) {
+        ...route53.connectionLookupResources()
       }
       ...domains.resources
       ...externalDomains.resources

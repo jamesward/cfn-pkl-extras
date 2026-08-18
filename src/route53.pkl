@@ -107,6 +107,18 @@ const connectionLookupCustomResource = new customResources.CustomResource {
   managedPolicyArns {}
 }
 
+// Shared connection-lookup resources (the Lambda + build infra) plus the
+// `ConnectionLookup` instance that resolves the ARN for this stack. Emitted
+// once per template so multiple StaticSites share a single ConnectionLookup
+// (its logical ids are fixed, so it can't be emitted per-site).
+function connectionLookupResources(): Mapping<patterns.ResourceName, cloudformation.Resource> =
+  new {
+    ...connectionLookupCustomResource.resources
+    ["ConnectionLookup"] = connectionLookupCustomResource.instance(new Mapping {
+      ["StackName"] = cloudformation.Ref("AWS::StackName")
+    })
+  }
+
 class Domain {
   domainName: DomainName
   contact: Contact
