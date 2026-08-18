@@ -1,6 +1,7 @@
 module `cfn-pkl-extras`.template
 
 import "@cfn/template.pkl" as cloudformationTemplate
+import "@cfn/aws/cloudfront/function.pkl" as cloudfrontFunction
 import "route53.pkl"
 import "patterns.pkl"
 
@@ -39,16 +40,35 @@ fixed cloudFormation: cloudformationTemplate =
     domains = externalDomains
   })
 
+  // Assemble all resources, then serialize CloudFront Function creation: CFN
+  // otherwise creates them all in parallel, which bursts past CloudFront's API
+  // rate limit ("Rate exceeded" / ServiceLimitExceeded) on larger stacks. A
+  // DependsOn chain forces one-at-a-time create/update/delete.
+  let (_allResources = new Mapping {
+    when (_needsHostedZone) {
+      ...route53.hostedZoneCustomResource.resources
+    }
+    when (_needsConnectionLookup) {
+      ...route53.connectionLookupResources()
+    }
+    ...domains.resources
+    ...externalDomains.resources
+  })
+  let (_cfFunctionIds =
+    _allResources.keys.toList().filter((k) -> _allResources[k] is cloudfrontFunction.Function)
+  )
+
   new {
-    Resources {
-      when (_needsHostedZone) {
-        ...route53.hostedZoneCustomResource.resources
+    Resources = (_allResources) {
+      for (_i, _fid in _cfFunctionIds) {
+        when (_i > 0) {
+          [_fid] {
+            DependsOn {
+              _cfFunctionIds[_i - 1]
+            }
+          }
+        }
       }
-      when (_needsConnectionLookup) {
-        ...route53.connectionLookupResources()
-      }
-      ...domains.resources
-      ...externalDomains.resources
     }
 
     Outputs {
