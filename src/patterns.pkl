@@ -450,6 +450,14 @@ class StaticSite {
   /// Branch whose pushes trigger a build + deploy.
   branch: String = "main"
 
+  /// CodeConnections ARN for this site's GitHub source. Defaults to the
+  /// connection that deploys the stack (resolved by the shared ConnectionLookup)
+  /// - correct when the repo is in the same GitHub org/account as the deploy
+  /// connection. Override with an explicit ARN (or intrinsic) when the repo is
+  /// in a different org/account, since CodeConnections connections are 1:1 per
+  /// org.
+  connectionArn: (String | Mapping) = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
+
   /// Internal, derived: whether this site serves on `domainName` (ACM cert +
   /// CloudFront alias + Route 53 records) or on the CloudFront default domain.
   /// Not user-settable - it's inferred from the domain: reserved test TLDs
@@ -676,7 +684,7 @@ class StaticSite {
                 // Scoped to the resolved connection; lets CodeBuild use it as a source.
                 Effect = "Allow"
                 Action { "codeconnections:GetConnectionToken"; "codeconnections:GetConnection"; "codeconnections:UseConnection" }
-                Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
+                Resource = connectionArn
               }
             }
           }
@@ -702,7 +710,7 @@ class StaticSite {
         Location = "https://github.com/\(githubRepo).git"
         Auth {
           Type = "CODECONNECTIONS"
-          Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
+          Resource = connectionArn
         }
         BuildSpec = buildSpec
         when (build.fetchSubmodules) {
