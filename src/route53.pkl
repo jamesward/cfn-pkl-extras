@@ -53,15 +53,13 @@ class Contact {
 
 const domainCustomResource = new customResources.CustomResource {
   resourceName = "Domain"
-  source = new customResources.Repo {
+  source = new customResources.Code {
     runtime = "python3.13"
     handler = "index.handler"
-    // Registration is asynchronous; the handler waits for the RegisterDomain
-    // operation to reach SUCCESSFUL before setting nameservers, so the Lambda
-    // needs a long timeout (was 10.s, which killed the invocation mid-wait).
+    // Registration is asynchronous; the handler polls the operation to
+    // SUCCESSFUL before setting nameservers, so it needs a long timeout.
     timeout = 600.s
-    gitHubOrgRepo = "jamesward/cfn-domain-resource"
-    commit = "3142af000d8da9b4f6cc4e173a06125584e4483c"
+    body = read("resources/domain.py").text
   }
   managedPolicyArns {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
@@ -72,52 +70,46 @@ const domainCustomResource = new customResources.CustomResource {
 // a given stack. This breaks the chicken-and-egg where a stack wants to reuse
 // the very connection that deploys it (e.g. to drive a CodeBuild deploy) but
 // CloudFormation has no native way to turn a connection into an ARN.
-// Backed by github.com/jamesward/cfn-connectionlookup-resource.
-const connectionLookupCustomResource = new customResources.CustomResource {
-  resourceName = "ConnectionLookup"
-  source = new customResources.Repo {
-    runtime = "python3.13"
-    handler = "index.handler"
-    timeout = 30.s
-    gitHubOrgRepo = "jamesward/cfn-connectionlookup-resource"
-    commit = "73cbe0e7c843165da8b748b46c9182974f4d5f66"
-  }
-  allow {
-    new customResources.Allow {
-      // GetSyncConfiguration has no resource-level permissions (no resource
-      // type in the service authorization reference), so it must be "*".
-      actions {
-        "codeconnections:GetSyncConfiguration"
-      }
-      resource {
-        "*"
-      }
-    }
-    new customResources.Allow {
-      // GetRepositoryLink operates on the RepositoryLink resource type, so it
-      // is scoped to repository links in this account and region.
-      actions {
-        "codeconnections:GetRepositoryLink"
-      }
-      resource {
-        cloudformation.Sub("arn:aws:codeconnections:${AWS::Region}:${AWS::AccountId}:repository-link/*")
-      }
-    }
-  }
-  managedPolicyArns {}
-}
-
-// Shared connection-lookup resources (the Lambda + build infra) plus the
-// `ConnectionLookup` instance that resolves the ARN for this stack. Emitted
-// once per template so multiple StaticSites share a single ConnectionLookup
-// (its logical ids are fixed, so it can't be emitted per-site).
+// Resolves the CodeConnections ARN that CloudFormation Git sync uses to deploy
+// this stack, via two AWS SDK calls (no bespoke Lambda, no build): the deploying
+// stack name -> get_sync_configuration -> RepositoryLinkId -> get_repository_link
+// -> ConnectionArn. Emitted once per template so multiple StaticSites share a
+// single invoker + ConnectionLookup. Consumers read the ARN with
+// Fn::GetAtt [ConnectionLookup, "RepositoryLinkInfo.ConnectionArn"].
 function connectionLookupResources(): Mapping<patterns.ResourceName, cloudformation.Resource> =
-  new {
-    ...connectionLookupCustomResource.resources
-    ["ConnectionLookup"] = connectionLookupCustomResource.instance(new Mapping {
-      ["StackName"] = cloudformation.Ref("AWS::StackName")
-    })
-  }
+  let (invoker = customResources.sdkCall(new Listing {
+    new customResources.Allow {
+      // GetSyncConfiguration has no resource-level permissions, so it must be "*".
+      actions { "codeconnections:GetSyncConfiguration" }
+      resource { "*" }
+    }
+    new customResources.Allow {
+      // GetRepositoryLink is scoped to repository links in this account/region.
+      actions { "codeconnections:GetRepositoryLink" }
+      resource { cloudformation.Sub("arn:aws:codeconnections:${AWS::Region}:${AWS::AccountId}:repository-link/*") }
+    }
+  }))
+    new Mapping {
+      ...invoker.resourcesForCode
+      // stack name -> RepositoryLinkId
+      ["ConnectionSyncConfig"] = invoker.instance(new Mapping {
+        ["Service"] = "codeconnections"
+        ["Action"] = "get_sync_configuration"
+        ["Parameters"] = new Mapping {
+          ["SyncType"] = "CFN_STACK_SYNC"
+          ["ResourceName"] = cloudformation.Ref("AWS::StackName")
+        }
+      })
+      // RepositoryLinkId -> ConnectionArn (also the physical id)
+      ["ConnectionLookup"] = invoker.instance(new Mapping {
+        ["Service"] = "codeconnections"
+        ["Action"] = "get_repository_link"
+        ["Parameters"] = new Mapping {
+          ["RepositoryLinkId"] = cloudformation.GetAtt("ConnectionSyncConfig", "SyncConfiguration.RepositoryLinkId")
+        }
+        ["PhysicalResourceIdPath"] = "RepositoryLinkInfo.ConnectionArn"
+      })
+    }
 
 class Domain {
   domainName: DomainName
@@ -161,12 +153,11 @@ class DomainRecord {
 
 hostedZoneCustomResource = new customResources.CustomResource {
   resourceName = "HostedZoneManager"
-  source = new customResources.Repo {
-    runtime = "python3.9"
+  source = new customResources.Code {
+    runtime = "python3.13"
     handler = "index.handler"
-    timeout = 10.s
-    gitHubOrgRepo = "jamesward/cfn-hostedzone-resource"
-    commit = "f90286ec969759d9a8d7062710d8837d825e77ab"
+    timeout = 60.s
+    body = read("resources/hostedzonecleanup.py").text
   }
   managedPolicyArns {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"

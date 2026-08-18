@@ -676,7 +676,7 @@ class StaticSite {
                 // Scoped to the resolved connection; lets CodeBuild use it as a source.
                 Effect = "Allow"
                 Action { "codeconnections:GetConnectionToken"; "codeconnections:GetConnection"; "codeconnections:UseConnection" }
-                Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
+                Resource = cloudformation.GetAtt("ConnectionLookup", "RepositoryLinkInfo.ConnectionArn")
               }
             }
           }
@@ -702,7 +702,7 @@ class StaticSite {
         Location = "https://github.com/\(githubRepo).git"
         Auth {
           Type = "CODECONNECTIONS"
-          Resource = cloudformation.GetAtt("ConnectionLookup", "ConnectionArn")
+          Resource = cloudformation.GetAtt("ConnectionLookup", "RepositoryLinkInfo.ConnectionArn")
         }
         BuildSpec = buildSpec
         when (build.fetchSubmodules) {
