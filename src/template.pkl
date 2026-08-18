@@ -22,13 +22,14 @@ fixed cloudFormation: cloudformationTemplate =
   // creates a Route 53 hosted zone. Computed before `externalDomains` is
   // shadowed by the local below.
   let (_needsHostedZone =
-    registeredDomains.toMap().values.any((d) -> d.createsHostedZone)
-      || externalDomains.toMap().values.any((d) -> d.createsHostedZone)
+    registeredDomains.keys.toList().any((k) -> registeredDomains[k].createsHostedZone(k))
+      || externalDomains.keys.toList().any((k) -> externalDomains[k].createsHostedZone(k))
   )
   // The connection-lookup resources are shared by all StaticSites, so emit them
-  // once when any externalDomain has a staticSite.
+  // once when any domain (registered or external) has a staticSite.
   let (_needsConnectionLookup =
-    externalDomains.toMap().values.any((d) -> d.staticSite != null)
+    registeredDomains.toMap().values.any((d) -> d.staticSite != null)
+      || externalDomains.toMap().values.any((d) -> d.staticSite != null)
   )
   let (domains = new patterns.Domains {
     contact = _contact

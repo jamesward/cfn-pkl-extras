@@ -469,7 +469,7 @@ Resources:
           phases:
             post_build:
               commands:
-                - aws s3 sync ./ "s3://${BUCKET}/" --delete --exclude '.git/*'
+                - EXCLUDES="--exclude '.git/*' --exclude '.slugignore'"; if [ -f .slugignore ]; then while IFS= read -r p; do case "$p" in ''|'#'*) ;; *) EXCLUDES="$EXCLUDES --exclude '$p'";; esac; done < .slugignore; fi; eval aws s3 sync ./ "s3://${BUCKET}/" --delete $EXCLUDES
                 - aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths '/*'
         Location: https://github.com/jamesward-test/asdf.git
         Type: GITHUB
@@ -771,7 +771,7 @@ Resources:
                 - hugo --gc --minify --baseURL "https://${SITE_URL}/"
             post_build:
               commands:
-                - aws s3 sync public/ "s3://${BUCKET}/" --delete --exclude '.git/*'
+                - EXCLUDES="--exclude '.git/*' --exclude '.slugignore'"; if [ -f .slugignore ]; then while IFS= read -r p; do case "$p" in ''|'#'*) ;; *) EXCLUDES="$EXCLUDES --exclude '$p'";; esac; done < .slugignore; fi; eval aws s3 sync public/ "s3://${BUCKET}/" --delete $EXCLUDES
                 - aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths '/*'
         GitSubmodulesConfig:
           FetchSubmodules: true

@@ -37,6 +37,7 @@ class DomainDetails {
   authCode: (String | Mapping)?
   redirect: BasicRedirect?
   ghpages: String?
+  staticSite: StaticSite?
   records: Listing<route53.DomainRecord>
   nameServers: Listing<route53.ValidDomainName>
   autoRenew: Boolean = true
@@ -53,8 +54,11 @@ class DomainDetails {
   validationMethod: ValidationMethod?
 
   /// Whether this domain results in a Route 53 hosted zone being created
-  /// (mirrors the branch logic in `Domains.apexDomainToResources`).
-  fixed createsHostedZone: Boolean = redirect != null || ghpages != null || !records.isEmpty
+  /// (mirrors the branch logic in `Domains.apexDomainToResources`). Takes the
+  /// apex key because a staticSite's `customDomain` is inferred from the domain.
+  function createsHostedZone(apexDomain: route53.ApexDomainName): Boolean =
+    redirect != null || ghpages != null || !records.isEmpty
+      || (staticSite != null && (staticSite!!) { domainName { name = apexDomain } }.customDomain)
 }
 
 class ExternalDomainDetails {
@@ -64,8 +68,11 @@ class ExternalDomainDetails {
 
   /// Whether this domain results in a Route 53 hosted zone being created
   /// (mirrors the branch logic in `ExternalDomains.apexDomainToResources`).
-  fixed createsHostedZone: Boolean =
-    redirect != null || !records.isEmpty || (staticSite?.customDomain ?? false)
+  /// Takes the apex key because a staticSite's `customDomain` is inferred from
+  /// the domain, and the staticSite's `domainName` is injected from the key.
+  function createsHostedZone(apexDomain: route53.ApexDomainName): Boolean =
+    redirect != null || !records.isEmpty
+      || (staticSite != null && (staticSite!!) { domainName { name = apexDomain } }.customDomain)
 }
 
 class Domains {
@@ -81,7 +88,7 @@ class Domains {
         contact = _contact
         transferAuthCode = domainDetails.authCode
         // todo: the way we set the nameservers is brittle
-        nameServers = if (domainDetails.nameServers.isEmpty && (domainDetails.redirect != null || domainDetails.ghpages != null || !domainDetails.records.isEmpty))
+        nameServers = if (domainDetails.nameServers.isEmpty && (domainDetails.redirect != null || domainDetails.ghpages != null || domainDetails.staticSite != null || !domainDetails.records.isEmpty))
             cloudformation.GetAtt("\(domainName.apexResourceName)HostedZone", "NameServers")
           else
             domainDetails.nameServers
@@ -135,6 +142,22 @@ class Domains {
             }
           }
         })
+      }
+    else if (domainDetails.staticSite != null)
+      new {
+        ...apexDomainToDomain(apexDomain, domainDetails).resources
+        // A real registered domain infers customDomain = true, so the static
+        // site creates the hosted zone, cert and alias; the domain's
+        // nameservers (above) point at that hosted zone.
+        ...(domainDetails.staticSite!!) {
+          domainName {
+            name = apexDomain
+          }
+        }.resources
+        // Additional records (MX, TXT, subdomains, ...) live in the same zone.
+        when (!domainDetails.records.isEmpty) {
+          ...route53.domainRecords(apexDomain, domainDetails.records)
+        }
       }
     else
       new {
@@ -427,12 +450,14 @@ class StaticSite {
   /// Branch whose pushes trigger a build + deploy.
   branch: String = "main"
 
-  /// When true, serve on `domainName` with an ACM certificate (DNS-validated
-  /// against a created hosted zone), a CloudFront alias and Route 53 alias
-  /// records. When false (default), serve on the CloudFront default domain
-  /// (`*.cloudfront.net`) with the default certificate - simplest for testing
-  /// since it needs no ACM validation or NS delegation.
-  customDomain: Boolean = false
+  /// Internal, derived: whether this site serves on `domainName` (ACM cert +
+  /// CloudFront alias + Route 53 records) or on the CloudFront default domain.
+  /// Not user-settable - it's inferred from the domain: reserved test TLDs
+  /// (RFC 2606 - `.test`, `.example`, `.invalid`, `.localhost`) never resolve,
+  /// so they serve on CloudFront (no ACM validation / NS delegation); every
+  /// other (real) domain serves on its custom domain.
+  fixed customDomain: Boolean =
+    !(List("test", "example", "invalid", "localhost").contains(domainName.name.split(".").last))
 
   /// How the site is built before publishing. Defaults to publishing the
   /// repository's files as-is (no build step).
@@ -441,6 +466,16 @@ class StaticSite {
   /// Path redirects served by the CloudFront viewer-request function (checked
   /// before the directory-index rewrite).
   redirects: Listing<SiteRedirect> = new Listing {}
+
+  /// Subdomain labels of the canonical domain (e.g. "www") that are served by
+  /// THIS distribution and 301-redirect to the canonical domain, handled in the
+  /// CloudFront function via the Host header - no separate distribution or
+  /// certificate. Each becomes a certificate SAN, a distribution alias, and a
+  /// Route 53 alias record. Requires `customDomain`.
+  redirectHosts: Listing<String>(this.isEmpty || customDomain) = new Listing {}
+
+  fixed redirectHostNames: Listing<String> =
+    redirectHosts.toList().map((h) -> "\(h).\(domainName.name)").toListing()
 
   fixed resourceName: ResourceName = domainName.resourceName
   fixed apexResourceName: ResourceName = domainName.apexResourceName
@@ -452,6 +487,13 @@ class StaticSite {
     "function handler(event) {"
     "  var request = event.request;"
     "  var uri = request.uri;"
+    when (!redirectHosts.isEmpty) {
+      "  var host = request.headers.host.value;"
+      "  if (host !== '\(domainName.name)') {"
+      "    var qs = Object.keys(request.querystring).map(function(k){ var v = request.querystring[k].value; return v ? k + '=' + v : k; }).join('&');"
+      "    return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: 'https://\(domainName.name)' + uri + (qs ? '?' + qs : '') } } };"
+      "  }"
+    }
     for (r in redirects) {
       when (r is ExactRedirect) {
         "  if (\(r.paths.toList().map((p) -> "uri === '\(p)'").join(" || "))) {"
@@ -484,6 +526,8 @@ class StaticSite {
   // Env vars (BUCKET, DISTRIBUTION_ID, SITE_URL) are injected by the CodeBuild
   // project, so the buildspec stays free of resource ids. The build phase is
   // omitted entirely when the strategy has no build commands (StaticFiles).
+  // An optional `.slugignore` (Heroku-style: one glob per line, `#` comments)
+  // in the repo adds `--exclude` patterns to the sync.
   fixed buildSpec: String = new Listing {
     "version: 0.2"
     "phases:"
@@ -496,7 +540,7 @@ class StaticSite {
     }
     "  post_build:"
     "    commands:"
-    "      - aws s3 sync \(build.publishDir)/ \"s3://${BUCKET}/\" --delete --exclude '.git/*'"
+    "      - EXCLUDES=\"--exclude '.git/*' --exclude '.slugignore'\"; if [ -f .slugignore ]; then while IFS= read -r p; do case \"$p\" in ''|'#'*) ;; *) EXCLUDES=\"$EXCLUDES --exclude '$p'\";; esac; done < .slugignore; fi; eval aws s3 sync \(build.publishDir)/ \"s3://${BUCKET}/\" --delete $EXCLUDES"
     "      - aws cloudfront create-invalidation --distribution-id \"${DISTRIBUTION_ID}\" --paths '/*'"
   }.join("\n")
 
@@ -557,7 +601,10 @@ class StaticSite {
           }
         }
         when (customDomain) {
-          Aliases { domainName.name }
+          Aliases {
+            domainName.name
+            ...redirectHostNames
+          }
           ViewerCertificate {
             AcmCertificateArn = cloudformation.Ref("\(apexResourceName)Certificate")
             SslSupportMethod = "sni-only"
@@ -688,9 +735,21 @@ class StaticSite {
             DomainName = domainName.name
             HostedZoneId = cloudformation.Ref("\(apexResourceName)HostedZone")
           }
+          for (h in redirectHostNames) {
+            new {
+              DomainName = h
+              HostedZoneId = cloudformation.Ref("\(apexResourceName)HostedZone")
+            }
+          }
+        }
+        when (!redirectHostNames.isEmpty) {
+          SubjectAlternativeNames = redirectHostNames
         }
       }
       ...distributionRecordSets(domainName)
+      for (h in redirectHostNames) {
+        ...distributionRecordSets(new route53.DomainName { name = h })
+      }
     }
   }
 }
