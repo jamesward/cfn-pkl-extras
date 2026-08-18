@@ -33,7 +33,7 @@ jobs:
     - uses: gradle/actions/setup-gradle@v5
     - run: ./gradlew pkldoc --info -Pversion=${{ github.ref_name }}
     - name: setup pages
-      uses: actions/configure-pages@v5
+      uses: actions/configure-pages@v6
     - name: upload artifact
       uses: actions/upload-pages-artifact@v4
       with:
