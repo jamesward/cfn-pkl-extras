@@ -22,6 +22,18 @@ const resourceNameInvalidRegex = Regex("[^\(resourceNameClases)]")
 
 typealias ResourceName = String(matches(resourceNameRegex), length < 256)
 
+// The pinned cloudformation-pkl (0.1.7) `Triggers` type predates CodeBuild's
+// `PullRequestBuildPolicy` property, so extend it to expose that field.
+// CodeBuild enables a pull request build policy by default on every new webhook
+// (`RequiresCommentApproval = ALL_PULL_REQUESTS`), which makes CodeBuild post a
+// failing "Pull request approval required" commit status on every PR even though
+// our filter groups only build pushes to the deploy branch. Setting it to
+// DISABLED removes that PR approval status without enabling PR builds (no filter
+// group matches pull request events, so PRs are never built).
+local open class TriggersWithPullRequestPolicy extends codebuildproject.ProjectProjectTriggers {
+  PullRequestBuildPolicy: Mapping?
+}
+
 
 class BasicRedirect {
   sub: String?
@@ -718,13 +730,17 @@ class StaticSite {
         }
       }
       SourceVersion = "refs/heads/\(branch)"
-      Triggers {
+      Triggers = new TriggersWithPullRequestPolicy {
         Webhook = true
         FilterGroups {
           new {
             new Mapping { ["Type"] = "EVENT"; ["Pattern"] = "PUSH" }
             new Mapping { ["Type"] = "HEAD_REF"; ["Pattern"] = "^refs/heads/\(branch)$" }
           }
+        }
+        // Only deploy on push to the branch; never engage with pull requests.
+        PullRequestBuildPolicy = new Mapping {
+          ["RequiresCommentApproval"] = "DISABLED"
         }
       }
     }
