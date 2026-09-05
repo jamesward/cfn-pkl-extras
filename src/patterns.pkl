@@ -35,19 +35,46 @@ local open class TriggersWithPullRequestPolicy extends codebuildproject.ProjectP
 }
 
 
+/// An exact request-path mapping within a whole-host redirect. This is useful
+/// for well-known discovery URLs whose destination path is not a simple prefix.
+class RedirectPathMapping {
+  paths: Listing<String>(!isEmpty)
+  to: Uri
+}
+
 class BasicRedirect {
+  /// Optional subdomain label. Null means the apex domain.
   sub: String?
   to: Uri
   permanent: Boolean = false
   aliases: Listing<route53.ValidDomainName>
   preservePath: Boolean = false
+  /// Preserve the request query string. Defaults to preservePath for backwards
+  /// compatibility with the original redirect behavior.
+  preserveQuery: Boolean = preservePath
+  /// Preserve every non-GET/HEAD method with 307/308. When false, retains the
+  /// legacy behavior of preserving POST only.
+  preserveMethods: Boolean = false
+  /// Exact path mappings evaluated before the default destination.
+  pathMappings: Listing<RedirectPathMapping>
 }
 
 
 // todo: can't have ghpages and redirect
 class DomainDetails {
   authCode: (String | Mapping)?
+  /// Legacy singular redirect. Retained for backwards compatibility and
+  /// combined with redirects below.
   redirect: BasicRedirect?
+  /// Additional independent redirects. Each gets its own certificate,
+  /// CloudFront function, distribution, and DNS records.
+  redirects: Listing<BasicRedirect>
+  fixed allRedirects: Listing<BasicRedirect> = new Listing {
+    when (redirect != null) {
+      redirect!!
+    }
+    ...redirects
+  }
   ghpages: String?
   staticSite: StaticSite?
   records: Listing<route53.DomainRecord>
@@ -69,12 +96,20 @@ class DomainDetails {
   /// (mirrors the branch logic in `Domains.apexDomainToResources`). Takes the
   /// apex key because a staticSite's `customDomain` is inferred from the domain.
   function createsHostedZone(apexDomain: route53.ApexDomainName): Boolean =
-    redirect != null || ghpages != null || !records.isEmpty
+    !allRedirects.isEmpty || ghpages != null || !records.isEmpty
       || (staticSite != null && (staticSite!!) { domainName { name = apexDomain } }.customDomain)
 }
 
 class ExternalDomainDetails {
+  /// Legacy singular redirect. Retained for backwards compatibility.
   redirect: BasicRedirect?
+  redirects: Listing<BasicRedirect>
+  fixed allRedirects: Listing<BasicRedirect> = new Listing {
+    when (redirect != null) {
+      redirect!!
+    }
+    ...redirects
+  }
   staticSite: StaticSite?
   records: Listing<route53.DomainRecord>
 
@@ -83,7 +118,7 @@ class ExternalDomainDetails {
   /// Takes the apex key because a staticSite's `customDomain` is inferred from
   /// the domain, and the staticSite's `domainName` is injected from the key.
   function createsHostedZone(apexDomain: route53.ApexDomainName): Boolean =
-    redirect != null || !records.isEmpty
+    !allRedirects.isEmpty || !records.isEmpty
       || (staticSite != null && (staticSite!!) { domainName { name = apexDomain } }.customDomain)
 }
 
@@ -100,7 +135,7 @@ class Domains {
         contact = _contact
         transferAuthCode = domainDetails.authCode
         // todo: the way we set the nameservers is brittle
-        nameServers = if (domainDetails.nameServers.isEmpty && (domainDetails.redirect != null || domainDetails.ghpages != null || domainDetails.staticSite != null || !domainDetails.records.isEmpty))
+        nameServers = if (domainDetails.nameServers.isEmpty && (!domainDetails.allRedirects.isEmpty || domainDetails.ghpages != null || domainDetails.staticSite != null || !domainDetails.records.isEmpty))
             cloudformation.GetAtt("\(domainName.apexResourceName)HostedZone", "NameServers")
           else
             domainDetails.nameServers
@@ -109,16 +144,19 @@ class Domains {
       }
 
   function apexDomainToResources(apexDomain: route53.ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cloudformation.Resource> =
-    if (domainDetails.redirect != null)
+    if (!domainDetails.allRedirects.isEmpty)
       new {
         ...apexDomainToDomain(apexDomain, domainDetails).resources
-        ...new WebSiteRedirect {
-          domainName {
-            name = domainDetails.redirect?.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
-          }
-          redirect = domainDetails.redirect
-          validationMethod = domainDetails.validationMethod ?? (if (domainDetails.authCode != null) "EMAIL" else "DNS") // transferring domains takes a long time, blocking certification creation
-        }.resources
+        for (_index, _redirect in domainDetails.allRedirects) {
+          ...new WebSiteRedirect {
+            domainName {
+              name = _redirect.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
+            }
+            redirect = _redirect
+            validationMethod = domainDetails.validationMethod ?? (if (domainDetails.authCode != null) "EMAIL" else "DNS") // transferring domains takes a long time, blocking certification creation
+            createHostedZone = _index == 0
+          }.resources
+        }
         when (!domainDetails.records.isEmpty) {
           ...route53.domainRecords(apexDomain, domainDetails.records)
         }
@@ -209,55 +247,94 @@ class Domains {
 }
 
 const function distributionRecordSets(domainName: route53.DomainName): Mapping<ResourceName, cloudformation.Resource> =
-  new Mapping<ResourceName, cloudformation.Resource> {
-    ["\(domainName.resourceName)RecordSetA"] = new recordset.RecordSet {
-      HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
-      Name = domainName.name
-      TypeProperty = "A"
-      AliasTarget {
-        // The following HosteZoneId is always used for alias records pointing to CF.
-        HostedZoneId = "Z2FDTNDATAQYW2"
-        //HostedZoneId = cloudformation.GetAtt("Distribution", "HostedZoneId")
-        DNSName = cloudformation.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
-        EvaluateTargetHealth = false
-      }
-    }
+  redirectDistributionRecordSets(domainName, domainName.apexResourceName, "ALIAS")
 
-    ["\(domainName.resourceName)RecordSetAAAA"] = new recordset.RecordSet {
-      HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
-      Name = domainName.name
-      TypeProperty = "AAAA"
-      AliasTarget {
-        // The following HosteZoneId is always used for alias records pointing to CF.
-        HostedZoneId = "Z2FDTNDATAQYW2"
-        //HostedZoneId = cloudformation.GetAtt("Distribution", "HostedZoneId")
-        DNSName = cloudformation.GetAtt("\(domainName.apexResourceName)Distribution", "DomainName")
-        EvaluateTargetHealth = false
+/// DNS records for a redirect distribution. The explicit distribution resource
+/// name is required because subdomain redirects no longer share the apex
+/// distribution. CNAME preserves the logical ID of an existing subdomain CNAME.
+const function redirectDistributionRecordSets(
+  domainName: route53.DomainName,
+  distributionResourceName: ResourceName,
+  dnsRecordType: "ALIAS" | "CNAME"
+): Mapping<ResourceName, cloudformation.Resource> =
+  if (dnsRecordType == "CNAME")
+    new Mapping<ResourceName, cloudformation.Resource> {
+      ["\(domainName.resourceName)RecordSetCNAME"] = new recordset.RecordSet {
+        HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
+        Name = domainName.name
+        TypeProperty = "CNAME"
+        TTL = "300"
+        ResourceRecords {
+          cloudformation.GetAtt("\(distributionResourceName)Distribution", "DomainName")
+        }
       }
     }
-  }
+  else
+    new Mapping<ResourceName, cloudformation.Resource> {
+      ["\(domainName.resourceName)RecordSetA"] = new recordset.RecordSet {
+        HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
+        Name = domainName.name
+        TypeProperty = "A"
+        AliasTarget {
+          // The following HostedZoneId is always used for aliases pointing to CloudFront.
+          HostedZoneId = "Z2FDTNDATAQYW2"
+          DNSName = cloudformation.GetAtt("\(distributionResourceName)Distribution", "DomainName")
+          EvaluateTargetHealth = false
+        }
+      }
+
+      ["\(domainName.resourceName)RecordSetAAAA"] = new recordset.RecordSet {
+        HostedZoneId = cloudformation.Ref("\(domainName.apexResourceName)HostedZone")
+        Name = domainName.name
+        TypeProperty = "AAAA"
+        AliasTarget {
+          HostedZoneId = "Z2FDTNDATAQYW2"
+          DNSName = cloudformation.GetAtt("\(distributionResourceName)Distribution", "DomainName")
+          EvaluateTargetHealth = false
+        }
+      }
+    }
 
 typealias ValidationMethod = "DNS" | "EMAIL"
 
 class WebSiteRedirect {
 
   domainName: route53.DomainName
-  redirect: BasicRedirect?
+  redirect: BasicRedirect
   validationMethod: ValidationMethod
+  /// Direct users get the historical hosted-zone behavior. Multi-redirect
+  /// callers set this only for the first redirect under an apex.
+  createHostedZone: Boolean = true
 
+  fixed resourceName: ResourceName = domainName.resourceName
+  /// Apex redirects use Route 53 alias A/AAAA records. Subdomain redirects use
+  /// CNAME so an existing subdomain CNAME can be updated in place.
+  fixed dnsRecordType: "ALIAS" | "CNAME" =
+    if (domainName.name == domainName.apex) "ALIAS" else "CNAME"
   fixed statusCode = if (redirect.permanent) 301 else 302
   fixed statusDescription = if (redirect.permanent) "Moved Permanently" else "Found"
+  fixed methodPreservingStatusCode = if (redirect.permanent) 308 else 307
+  fixed methodPreservingStatusDescription = if (redirect.permanent) "Permanent Redirect" else "Temporary Redirect"
+  fixed querySuffixExpression: String = if (redirect.preserveQuery) " + query" else ""
+  fixed methodPreservingExpression: String =
+    if (redirect.preserveMethods)
+      "request.method !== 'GET' && request.method !== 'HEAD'"
+    else
+      "request.method === 'POST'"
 
-  fixed postStatusCode = if (redirect.permanent) 308 else 307
-  fixed postStatusDescription = if (redirect.permanent) "Permanent Redirect" else "Temporary Redirect"
+  /// Keep existing stacks byte-stable unless a new redirect feature is used.
+  fixed usesLegacyRedirector: Boolean =
+    redirect.pathMappings.isEmpty
+      && !redirect.preserveMethods
+      && redirect.preserveQuery == redirect.preservePath
 
-  fixed redirector: String =
+  fixed legacyRedirector: String =
     if (redirect.preservePath)
       """
       function handler(event) {
         var path = event.request.uri
-        var statusCode = (event.request.method === 'POST') ? \(postStatusCode) : \(statusCode)
-        var statusDescription = (event.request.method === 'POST') ? '\(postStatusDescription)' : '\(statusDescription)'
+        var statusCode = (event.request.method === 'POST') ? \(methodPreservingStatusCode) : \(statusCode)
+        var statusDescription = (event.request.method === 'POST') ? '\(methodPreservingStatusDescription)' : '\(statusDescription)'
         var qs = Object.keys(event.request.querystring)
           .map(function(k) {
             var val = event.request.querystring[k].value;
@@ -277,8 +354,8 @@ class WebSiteRedirect {
     else
       """
       function handler(event) {
-        var statusCode = (event.request.method === 'POST') ? \(postStatusCode) : \(statusCode)
-        var statusDescription = (event.request.method === 'POST') ? '\(postStatusDescription)' : '\(statusDescription)'
+        var statusCode = (event.request.method === 'POST') ? \(methodPreservingStatusCode) : \(statusCode)
+        var statusDescription = (event.request.method === 'POST') ? '\(methodPreservingStatusDescription)' : '\(statusDescription)'
 
         return {
           statusCode: statusCode,
@@ -290,19 +367,73 @@ class WebSiteRedirect {
       }
       """
 
+  fixed enhancedRedirector: String = new Listing<String> {
+    when (redirect.preserveQuery) {
+      "function querySuffix(querystring) {"
+      "  var parts = [];"
+      "  var keys = Object.keys(querystring || {});"
+      "  for (var i = 0; i < keys.length; i++) {"
+      "    var key = keys[i];"
+      "    var entry = querystring[key];"
+      "    var values = entry.multiValue || [entry];"
+      "    for (var j = 0; j < values.length; j++) {"
+      "      var value = values[j].value;"
+      "      parts.push(value ? key + '=' + value : key);"
+      "    }"
+      "  }"
+      "  return parts.length ? '?' + parts.join('&') : '';"
+      "}"
+      ""
+    }
+    "function handler(event) {"
+    "  var request = event.request;"
+    "  var path = request.uri || '/';"
+    "  var preserveMethod = \(methodPreservingExpression);"
+    "  var statusCode = preserveMethod ? \(methodPreservingStatusCode) : \(statusCode);"
+    "  var statusDescription = preserveMethod ? '\(methodPreservingStatusDescription)' : '\(statusDescription)';"
+    when (redirect.preserveQuery) {
+      "  var query = querySuffix(request.querystring);"
+    }
+    for (mapping in redirect.pathMappings) {
+      "  if (\(mapping.paths.toList().map((path) -> "path === '\(path)'").join(" || "))) {"
+      "    return { statusCode: statusCode, statusDescription: statusDescription, headers: { location: { value: '\(mapping.to)'\(querySuffixExpression) } } };"
+      "  }"
+    }
+    when (redirect.preservePath) {
+      "  var destination = '\(redirect.to)' + path;"
+    }
+    when (!redirect.preservePath) {
+      "  var destination = '\(redirect.to)';"
+    }
+    "  return {"
+    "    statusCode: statusCode,"
+    "    statusDescription: statusDescription,"
+    "    headers: { location: { value: destination\(querySuffixExpression) } }"
+    "  };"
+    "}"
+  }.join("\n")
+
+  fixed redirector: String = if (usesLegacyRedirector) legacyRedirector else enhancedRedirector
+
   fixed resources: Mapping<ResourceName, cloudformation.Resource> = new {
-    ...route53.hostedZone(domainName)
-
-    ...distributionRecordSets(domainName)
-
-    for (alias in redirect.aliases) {
-      ...distributionRecordSets(new route53.DomainName { name = alias })
+    when (createHostedZone) {
+      ...route53.hostedZone(domainName)
     }
 
-    ["\(domainName.apexResourceName)Certificate"] = new certificate.Certificate {
+    ...redirectDistributionRecordSets(domainName, resourceName, dnsRecordType)
+
+    for (alias in redirect.aliases) {
+      ...redirectDistributionRecordSets(
+        new route53.DomainName { name = alias },
+        resourceName,
+        dnsRecordType
+      )
+    }
+
+    ["\(resourceName)Certificate"] = new certificate.Certificate {
       DomainName = domainName.name
       ValidationMethod = validationMethod
-      // Adds the validation record to the hostedzone
+      // Adds the validation record to the hosted zone.
       DomainValidationOptions {
         new {
           DomainName = domainName.name
@@ -328,8 +459,8 @@ class WebSiteRedirect {
       SubjectAlternativeNames = redirect.aliases
     }
 
-    ["\(domainName.apexResourceName)DistributionFunction"] = new cloudfrontFunction.Function {
-      Name = "\(domainName.apexResourceName)Redirect"
+    ["\(resourceName)DistributionFunction"] = new cloudfrontFunction.Function {
+      Name = "\(resourceName)Redirect"
       AutoPublish = true
       FunctionCode = redirector
       FunctionConfig {
@@ -338,7 +469,7 @@ class WebSiteRedirect {
       }
     }
 
-    ["\(domainName.apexResourceName)Distribution"] = new distribution.Distribution {
+    ["\(resourceName)Distribution"] = new distribution.Distribution {
       DistributionConfig {
         Enabled = true
         DefaultCacheBehavior {
@@ -347,7 +478,7 @@ class WebSiteRedirect {
           FunctionAssociations {
             new {
               EventType = "viewer-request"
-              FunctionARN = cloudformation.GetAtt("\(domainName.apexResourceName)DistributionFunction", "FunctionMetadata.FunctionARN")
+              FunctionARN = cloudformation.GetAtt("\(resourceName)DistributionFunction", "FunctionMetadata.FunctionARN")
             }
           }
           ForwardedValues {
@@ -378,7 +509,7 @@ class WebSiteRedirect {
           ...redirect.aliases
         }
         ViewerCertificate {
-          AcmCertificateArn = cloudformation.Ref("\(domainName.apexResourceName)Certificate")
+          AcmCertificateArn = cloudformation.Ref("\(resourceName)Certificate")
           SslSupportMethod = "sni-only"
         }
       }
@@ -784,15 +915,18 @@ class ExternalDomains {
   domains: Mapping<route53.ApexDomainName, ExternalDomainDetails>
 
   function apexDomainToResources(apexDomain: route53.ApexDomainName, externalDomainDetails: ExternalDomainDetails): Mapping<ResourceName, cloudformation.Resource> =
-    if (externalDomainDetails.redirect != null)
+    if (!externalDomainDetails.allRedirects.isEmpty)
       new {
-        ...new WebSiteRedirect {
-          domainName {
-            name = externalDomainDetails.redirect?.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
-          }
-          redirect = externalDomainDetails.redirect
-          validationMethod = "DNS"
-        }.resources
+        for (_index, _redirect in externalDomainDetails.allRedirects) {
+          ...new WebSiteRedirect {
+            domainName {
+              name = _redirect.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
+            }
+            redirect = _redirect
+            validationMethod = "DNS"
+            createHostedZone = _index == 0
+          }.resources
+        }
         when (!externalDomainDetails.records.isEmpty) {
           ...route53.domainRecords(apexDomain, externalDomainDetails.records)
         }

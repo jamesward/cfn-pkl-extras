@@ -1,68 +1,94 @@
 amends "pkl:test"
 
+import "@cfn/cloudformation.pkl"
 import "patterns.pkl"
+import "route53.pkl"
 
-//
-// local permRoot = patterns.redirectToJS(new patterns.PermanentRedirect {
-//   redirectMatcher = "/"
-//   url = "https://jamesward.com"
-// })
-//
-// local permAll = patterns.redirectToJS(new patterns.PermanentRedirect {
-//   redirectMatcher = "/*"
-//   url = "https://jamesward.com"
-// })
-//
-// local hiddenRoot = patterns.redirectToJS(new patterns.HiddenRedirect {
-//   redirectMatcher = "/"
-//   ammed = "index.html"
-// })
-//
-// local hiddenTrailingSlash = patterns.redirectToJS(new patterns.HiddenRedirect {
-//   redirectMatcher = "*/"
-//   ammed = "index.html"
-// })
-//
-// facts {
-//   ["redirectToJS"] {
-//     permRoot ==
-//       """
-//       if (uri == '/') {
-//         return {
-//           statusCode: 301,
-//           statusDescription: 'Moved Permanently',
-//           headers: {
-//             location: { value: 'https://jamesward.com' }
-//           }
-//         }
-//       }
-//       """
-//
-//     permAll ==
-//       """
-//       if (true) {
-//         return {
-//           statusCode: 301,
-//           statusDescription: 'Moved Permanently',
-//           headers: {
-//             location: { value: 'https://jamesward.com' + request.path }
-//           }
-//         }
-//       }
-//       """
-//
-//     hiddenRoot ==
-//       """
-//       if (uri == '/') {
-//         request.uri += 'index.html';
-//       }
-//       """
-//
-//     hiddenTrailingSlash ==
-//       """
-//       if (uri.endsWith('/')) {
-//         request.uri += 'index.html';
-//       }
-//       """
-//   }
-// }
+local testContact = new route53.Contact {
+  firstName = "Test"
+  lastName = "Person"
+  type = "PERSON"
+  addressLine1 = "1 Test Way"
+  city = "Testville"
+  state = "CO"
+  countryCode = "US"
+  zipCode = "80000"
+  phoneNumber = "+1.3035551212"
+  email = "test@example.com"
+}
+
+local domainResources = new patterns.Domains {
+  contact = testContact
+  domains {
+    ["example.com"] {
+      // The legacy singular form must retain its existing logical IDs.
+      redirect {
+        to = "https://www.example.net"
+        aliases {
+          "www.example.com"
+        }
+        preservePath = true
+      }
+      // Additional entries each create an independent distribution.
+      redirects {
+        new patterns.BasicRedirect {
+          sub = "mcp"
+          to = "https://mcp.example.net/server"
+          preserveQuery = true
+          preserveMethods = true
+          pathMappings {
+            new patterns.RedirectPathMapping {
+              paths {
+                "/.well-known/oauth-protected-resource"
+                "/.well-known/oauth-protected-resource/"
+              }
+              to = "https://mcp.example.net/.well-known/oauth-protected-resource/server"
+            }
+          }
+        }
+      }
+    }
+  }
+}.resources
+
+local apexFunctionCode: String = domainResources["examplecomDistributionFunction"].Properties["FunctionCode"]
+local mcpFunctionCode: String = domainResources["mcpexamplecomDistributionFunction"].Properties["FunctionCode"]
+local mcpCnameRecords: Listing = domainResources["mcpexamplecomRecordSetCNAME"].Properties["ResourceRecords"]
+local wwwAliasTarget: Mapping = domainResources["wwwexamplecomRecordSetA"].Properties["AliasTarget"].DNSName
+
+facts {
+  ["independent multi-redirect resources"] {
+    domainResources.containsKey("examplecomCertificate")
+    domainResources.containsKey("examplecomDistributionFunction")
+    domainResources.containsKey("examplecomDistribution")
+    domainResources.containsKey("examplecomRecordSetA")
+    domainResources.containsKey("examplecomRecordSetAAAA")
+    !domainResources.containsKey("examplecomRecordSetCNAME")
+    domainResources.containsKey("mcpexamplecomCertificate")
+    domainResources.containsKey("mcpexamplecomDistributionFunction")
+    domainResources.containsKey("mcpexamplecomDistribution")
+    domainResources.containsKey("mcpexamplecomRecordSetCNAME")
+    !domainResources.containsKey("mcpexamplecomRecordSetA")
+    !domainResources.containsKey("mcpexamplecomRecordSetAAAA")
+  }
+
+  ["legacy apex and alias resource references remain stable"] {
+    wwwAliasTarget == cloudformation.GetAtt("examplecomDistribution", "DomainName")
+    apexFunctionCode.contains("https://www.example.net")
+    apexFunctionCode.contains("'location': { value: 'https://www.example.net' + path + (qs ? '?' + qs : '') }")
+  }
+
+  ["subdomain CNAME is inferred and targets its independent distribution"] {
+    mcpCnameRecords.length == 1
+    mcpCnameRecords[0] == cloudformation.GetAtt("mcpexamplecomDistribution", "DomainName")
+  }
+
+  ["method, query, and exact path mapping code"] {
+    mcpFunctionCode.contains("request.method !== 'GET' && request.method !== 'HEAD'")
+    mcpFunctionCode.contains("preserveMethod ? 307 : 302")
+    mcpFunctionCode.contains("var query = querySuffix(request.querystring);")
+    mcpFunctionCode.contains("path === '/.well-known/oauth-protected-resource' || path === '/.well-known/oauth-protected-resource/'")
+    mcpFunctionCode.contains("https://mcp.example.net/.well-known/oauth-protected-resource/server")
+    mcpFunctionCode.contains("var destination = 'https://mcp.example.net/server';")
+  }
+}

@@ -88,6 +88,42 @@ externalDomains {
 }
 ```
 
+### Multiple Independent Redirects
+
+`redirect` remains available for backwards compatibility. Use `redirects` to add independent hostname redirects under the same apex domain; each entry receives its own ACM certificate, CloudFront function, distribution, and DNS records.
+
+```pkl
+registeredDomains {
+  ["example.com"] {
+    redirect {
+      to = "https://www.example.net"
+      aliases { "www.example.com" }
+    }
+    redirects {
+      new patterns.BasicRedirect {
+        sub = "mcp"
+        to = "https://mcp.example.net/server"
+        // Subdomain redirects automatically use a CNAME, preserving an
+        // existing CNAME logical resource during migration.
+        preserveQuery = true
+        preserveMethods = true
+        pathMappings {
+          new patterns.RedirectPathMapping {
+            paths {
+              "/.well-known/oauth-protected-resource"
+              "/.well-known/oauth-protected-resource/"
+            }
+            to = "https://mcp.example.net/.well-known/oauth-protected-resource/server"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+POST uses 307/308 as before. Set `preserveMethods = true` to use 307/308 for every non-GET/HEAD method, preserving request methods and bodies.
+
 ## Lower-Level Abstractions
 
 ### Custom Resources
