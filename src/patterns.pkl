@@ -144,7 +144,34 @@ class Domains {
       }
 
   function apexDomainToResources(apexDomain: route53.ApexDomainName, domainDetails: DomainDetails): Mapping<ResourceName, cloudformation.Resource> =
-    if (!domainDetails.allRedirects.isEmpty)
+    if (domainDetails.staticSite != null)
+      new {
+        ...apexDomainToDomain(apexDomain, domainDetails).resources
+        // A real registered domain infers customDomain = true, so the static
+        // site creates the hosted zone, cert and alias; the domain's
+        // nameservers (above) point at that hosted zone.
+        ...(domainDetails.staticSite!!) {
+          domainName {
+            name = apexDomain
+          }
+        }.resources
+        // Independent redirects reuse the static site's hosted zone.
+        for (_redirect in domainDetails.allRedirects) {
+          ...new WebSiteRedirect {
+            domainName {
+              name = _redirect.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
+            }
+            redirect = _redirect
+            validationMethod = domainDetails.validationMethod ?? (if (domainDetails.authCode != null) "EMAIL" else "DNS")
+            createHostedZone = false
+          }.resources
+        }
+        // Additional records (MX, TXT, subdomains, ...) live in the same zone.
+        when (!domainDetails.records.isEmpty) {
+          ...route53.domainRecords(apexDomain, domainDetails.records)
+        }
+      }
+    else if (!domainDetails.allRedirects.isEmpty)
       new {
         ...apexDomainToDomain(apexDomain, domainDetails).resources
         for (_index, _redirect in domainDetails.allRedirects) {
@@ -192,22 +219,6 @@ class Domains {
             }
           }
         })
-      }
-    else if (domainDetails.staticSite != null)
-      new {
-        ...apexDomainToDomain(apexDomain, domainDetails).resources
-        // A real registered domain infers customDomain = true, so the static
-        // site creates the hosted zone, cert and alias; the domain's
-        // nameservers (above) point at that hosted zone.
-        ...(domainDetails.staticSite!!) {
-          domainName {
-            name = apexDomain
-          }
-        }.resources
-        // Additional records (MX, TXT, subdomains, ...) live in the same zone.
-        when (!domainDetails.records.isEmpty) {
-          ...route53.domainRecords(apexDomain, domainDetails.records)
-        }
       }
     else
       new {
@@ -915,7 +926,32 @@ class ExternalDomains {
   domains: Mapping<route53.ApexDomainName, ExternalDomainDetails>
 
   function apexDomainToResources(apexDomain: route53.ApexDomainName, externalDomainDetails: ExternalDomainDetails): Mapping<ResourceName, cloudformation.Resource> =
-    if (!externalDomainDetails.allRedirects.isEmpty)
+    if (externalDomainDetails.staticSite != null)
+      new {
+        // Inject the domain from the apex key so the site doesn't repeat it.
+        ...(externalDomainDetails.staticSite!!) {
+          domainName {
+            name = apexDomain
+          }
+        }.resources
+        // Independent redirects reuse the static site's hosted zone.
+        for (_redirect in externalDomainDetails.allRedirects) {
+          ...new WebSiteRedirect {
+            domainName {
+              name = _redirect.sub.ifNonNull((sub) -> "\(sub).\(apexDomain)") ?? apexDomain
+            }
+            redirect = _redirect
+            validationMethod = "DNS"
+            createHostedZone = false
+          }.resources
+        }
+        // Extra records only make sense alongside a custom-domain site (which
+        // creates the hosted zone they attach to).
+        when (!externalDomainDetails.records.isEmpty) {
+          ...route53.domainRecords(apexDomain, externalDomainDetails.records)
+        }
+      }
+    else if (!externalDomainDetails.allRedirects.isEmpty)
       new {
         for (_index, _redirect in externalDomainDetails.allRedirects) {
           ...new WebSiteRedirect {
@@ -927,20 +963,6 @@ class ExternalDomains {
             createHostedZone = _index == 0
           }.resources
         }
-        when (!externalDomainDetails.records.isEmpty) {
-          ...route53.domainRecords(apexDomain, externalDomainDetails.records)
-        }
-      }
-    else if (externalDomainDetails.staticSite != null)
-      new {
-        // Inject the domain from the apex key so the site doesn't repeat it.
-        ...(externalDomainDetails.staticSite!!) {
-          domainName {
-            name = apexDomain
-          }
-        }.resources
-        // Extra records only make sense alongside a custom-domain site (which
-        // creates the hosted zone they attach to).
         when (!externalDomainDetails.records.isEmpty) {
           ...route53.domainRecords(apexDomain, externalDomainDetails.records)
         }

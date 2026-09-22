@@ -56,6 +56,39 @@ local mcpFunctionCode: String = domainResources["mcpexamplecomDistributionFuncti
 local mcpCnameRecords: Listing = domainResources["mcpexamplecomRecordSetCNAME"].Properties["ResourceRecords"]
 local wwwAliasTarget: Mapping = domainResources["wwwexamplecomRecordSetA"].Properties["AliasTarget"].DNSName
 
+local staticSiteDomainResources = new patterns.Domains {
+  contact = testContact
+  domains {
+    ["static-site.com"] {
+      staticSite {
+        githubRepo = "example/static-site"
+      }
+      redirects {
+        new patterns.BasicRedirect {
+          sub = "start"
+          to = "https://example.net/start"
+        }
+      }
+    }
+  }
+}.resources
+
+local externalStaticSiteDomainResources = new patterns.ExternalDomains {
+  domains {
+    ["external-static-site.com"] {
+      staticSite {
+        githubRepo = "example/external-static-site"
+      }
+      redirects {
+        new patterns.BasicRedirect {
+          sub = "start"
+          to = "https://example.net/external-start"
+        }
+      }
+    }
+  }
+}.resources
+
 facts {
   ["independent multi-redirect resources"] {
     domainResources.containsKey("examplecomCertificate")
@@ -90,5 +123,29 @@ facts {
     mcpFunctionCode.contains("path === '/.well-known/oauth-protected-resource' || path === '/.well-known/oauth-protected-resource/'")
     mcpFunctionCode.contains("https://mcp.example.net/.well-known/oauth-protected-resource/server")
     mcpFunctionCode.contains("var destination = 'https://mcp.example.net/server';")
+  }
+
+  ["registered static site and redirect resources coexist"] {
+    staticSiteDomainResources.containsKey("staticsitecomBucket")
+    staticSiteDomainResources.containsKey("staticsitecomDistribution")
+    staticSiteDomainResources.containsKey("staticsitecomHostedZone")
+    staticSiteDomainResources.containsKey("startstaticsitecomCertificate")
+    staticSiteDomainResources.containsKey("startstaticsitecomDistributionFunction")
+    staticSiteDomainResources.containsKey("startstaticsitecomDistribution")
+    staticSiteDomainResources.containsKey("startstaticsitecomRecordSetCNAME")
+    staticSiteDomainResources["startstaticsitecomRecordSetCNAME"].Properties["HostedZoneId"] == cloudformation.Ref("staticsitecomHostedZone")
+    staticSiteDomainResources["startstaticsitecomDistributionFunction"].Properties["FunctionCode"].contains("https://example.net/start")
+  }
+
+  ["external static site and redirect resources coexist"] {
+    externalStaticSiteDomainResources.containsKey("externalstaticsitecomBucket")
+    externalStaticSiteDomainResources.containsKey("externalstaticsitecomDistribution")
+    externalStaticSiteDomainResources.containsKey("externalstaticsitecomHostedZone")
+    externalStaticSiteDomainResources.containsKey("startexternalstaticsitecomCertificate")
+    externalStaticSiteDomainResources.containsKey("startexternalstaticsitecomDistributionFunction")
+    externalStaticSiteDomainResources.containsKey("startexternalstaticsitecomDistribution")
+    externalStaticSiteDomainResources.containsKey("startexternalstaticsitecomRecordSetCNAME")
+    externalStaticSiteDomainResources["startexternalstaticsitecomRecordSetCNAME"].Properties["HostedZoneId"] == cloudformation.Ref("externalstaticsitecomHostedZone")
+    externalStaticSiteDomainResources["startexternalstaticsitecomDistributionFunction"].Properties["FunctionCode"].contains("https://example.net/external-start")
   }
 }
