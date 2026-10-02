@@ -89,6 +89,8 @@ local externalStaticSiteDomainResources = new patterns.ExternalDomains {
   }
 }.resources
 
+local staticSiteBuildSpec: String = staticSiteDomainResources["staticsitecomBuildProject"].Properties["Source"].BuildSpec
+
 facts {
   ["independent multi-redirect resources"] {
     domainResources.containsKey("examplecomCertificate")
@@ -137,6 +139,12 @@ facts {
     staticSiteDomainResources["startstaticsitecomDistributionFunction"].Properties["FunctionCode"].contains("https://example.net/start")
   }
 
+  ["static site deploy removes ignored files from the bucket"] {
+    staticSiteBuildSpec.contains("aws s3 sync ./ \"s3://${BUCKET}/\" --delete $EXCLUDES")
+    staticSiteBuildSpec.contains("aws s3 rm \"s3://${BUCKET}/\" --recursive --exclude \"'*'\" $INCLUDES")
+    staticSiteBuildSpec.contains("INCLUDES=\"$INCLUDES --include '$p'\"")
+    staticSiteBuildSpec.contains("read -r p || [ -n \"$p\" ]")
+  }
   ["external static site and redirect resources coexist"] {
     externalStaticSiteDomainResources.containsKey("externalstaticsitecomBucket")
     externalStaticSiteDomainResources.containsKey("externalstaticsitecomDistribution")

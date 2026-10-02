@@ -231,7 +231,7 @@ Resources:
           phases:
             post_build:
               commands:
-                - EXCLUDES="--exclude '.git/*' --exclude '.slugignore'"; if [ -f .slugignore ]; then while IFS= read -r p; do case "$p" in ''|'#'*) ;; *) EXCLUDES="$EXCLUDES --exclude '$p'";; esac; done < .slugignore; fi; eval aws s3 sync ./ "s3://${BUCKET}/" --delete $EXCLUDES
+                - EXCLUDES="--exclude '.git/*' --exclude '.slugignore'"; INCLUDES="--include '.git/*' --include '.slugignore'"; if [ -f .slugignore ]; then while IFS= read -r p || [ -n "$p" ]; do case "$p" in ''|'#'*) ;; *) EXCLUDES="$EXCLUDES --exclude '$p'"; INCLUDES="$INCLUDES --include '$p'";; esac; done < .slugignore; fi; eval aws s3 sync ./ "s3://${BUCKET}/" --delete $EXCLUDES && eval aws s3 rm "s3://${BUCKET}/" --recursive --exclude "'*'" $INCLUDES
                 - aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths '/*'
         Location: https://github.com/jamesward-test/asdf.git
         Type: GITHUB
@@ -243,6 +243,8 @@ Resources:
           - Type: HEAD_REF
             Pattern: ^refs/heads/main$
         Webhook: true
+        PullRequestBuildPolicy:
+          RequiresCommentApproval: DISABLED
   asdftestTriggerBuildRole:
     Type: AWS::IAM::Role
     Properties:
@@ -327,6 +329,8 @@ Resources:
         Comment: Directory index rewrite
         Runtime: cloudfront-js-1.0
       Name: hellohugotestIndex
+    DependsOn:
+    - asdftestIndexFunction
   hellohugotestDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -468,7 +472,7 @@ Resources:
                 - hugo --gc --minify --baseURL "https://${SITE_URL}/"
             post_build:
               commands:
-                - EXCLUDES="--exclude '.git/*' --exclude '.slugignore'"; if [ -f .slugignore ]; then while IFS= read -r p; do case "$p" in ''|'#'*) ;; *) EXCLUDES="$EXCLUDES --exclude '$p'";; esac; done < .slugignore; fi; eval aws s3 sync public/ "s3://${BUCKET}/" --delete $EXCLUDES
+                - EXCLUDES="--exclude '.git/*' --exclude '.slugignore'"; INCLUDES="--include '.git/*' --include '.slugignore'"; if [ -f .slugignore ]; then while IFS= read -r p || [ -n "$p" ]; do case "$p" in ''|'#'*) ;; *) EXCLUDES="$EXCLUDES --exclude '$p'"; INCLUDES="$INCLUDES --include '$p'";; esac; done < .slugignore; fi; eval aws s3 sync public/ "s3://${BUCKET}/" --delete $EXCLUDES && eval aws s3 rm "s3://${BUCKET}/" --recursive --exclude "'*'" $INCLUDES
                 - aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths '/*'
         GitSubmodulesConfig:
           FetchSubmodules: true
@@ -482,6 +486,8 @@ Resources:
           - Type: HEAD_REF
             Pattern: ^refs/heads/main$
         Webhook: true
+        PullRequestBuildPolicy:
+          RequiresCommentApproval: DISABLED
   hellohugotestTriggerBuildRole:
     Type: AWS::IAM::Role
     Properties:

@@ -689,7 +689,9 @@ class StaticSite {
   // project, so the buildspec stays free of resource ids. The build phase is
   // omitted entirely when the strategy has no build commands (StaticFiles).
   // An optional `.slugignore` (Heroku-style: one glob per line, `#` comments)
-  // in the repo adds `--exclude` patterns to the sync.
+  // in the repo adds `--exclude` patterns to the sync. `aws s3 sync --delete`
+  // never deletes excluded keys, so a second step removes any object matching an
+  // excluded pattern (for example files published before they were ignored).
   fixed buildSpec: String = new Listing {
     "version: 0.2"
     "phases:"
@@ -702,7 +704,7 @@ class StaticSite {
     }
     "  post_build:"
     "    commands:"
-    "      - EXCLUDES=\"--exclude '.git/*' --exclude '.slugignore'\"; if [ -f .slugignore ]; then while IFS= read -r p; do case \"$p\" in ''|'#'*) ;; *) EXCLUDES=\"$EXCLUDES --exclude '$p'\";; esac; done < .slugignore; fi; eval aws s3 sync \(build.publishDir)/ \"s3://${BUCKET}/\" --delete $EXCLUDES"
+    "      - EXCLUDES=\"--exclude '.git/*' --exclude '.slugignore'\"; INCLUDES=\"--include '.git/*' --include '.slugignore'\"; if [ -f .slugignore ]; then while IFS= read -r p || [ -n \"$p\" ]; do case \"$p\" in ''|'#'*) ;; *) EXCLUDES=\"$EXCLUDES --exclude '$p'\"; INCLUDES=\"$INCLUDES --include '$p'\";; esac; done < .slugignore; fi; eval aws s3 sync \(build.publishDir)/ \"s3://${BUCKET}/\" --delete $EXCLUDES && eval aws s3 rm \"s3://${BUCKET}/\" --recursive --exclude \"'*'\" $INCLUDES"
     "      - aws cloudfront create-invalidation --distribution-id \"${DISTRIBUTION_ID}\" --paths '/*'"
   }.join("\n")
 
