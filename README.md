@@ -128,79 +128,49 @@ POST uses 307/308 as before. Set `preserveMethods = true` to use 307/308 for eve
 
 ### Custom Resources
 
-> Create CloudFormation Custom Resources from inline code or a GitHub repo
+> Create CloudFormation Custom Resources backed by the published [cfn-extras-resource](https://github.com/jamesward/cfn-extras-resource) Lambda artifact
 
 [CustomResource PklDoc](https://jamesward.github.io/cfn-pkl-extras/pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras/current/customResources/CustomResource.html)
 
-Inline Example:
+Every custom resource uses the same public, versioned artifact from cfn-extras-resource (Lambda self-managed S3 storage, so there's nothing to build or upload). Each resource just picks its `handler`. The available handlers are listed in the [cfn-extras-resource README](https://github.com/jamesward/cfn-extras-resource#resources); for example `cfn_extras.domain.handler`, `cfn_extras.connection_lookup.handler`, `cfn_extras.hosted_zone.handler`, `cfn_extras.sdk_call.handler`, `cfn_extras.trigger_build.handler` and `cfn_extras.cleanup_bucket.handler`.
+
+Example: the Domain resource. `route53.Domain` (below) wraps this for you.
 ```pkl
 import "@cfn-pkl-extras/customResources.pkl"
 
-myCustomResource = new customResources.CustomResource {
-  resourceName = "MyCustomResource"
-  source = new customResources.Code {
-    runtime = "python3.9"
-    handler = "index.handler"
-    timeout = 900.s
-    body = """
-      import boto3
-      import cfnresponse
-      import time
-
-      def handler(event, context):
-        response_data = { }
-        cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
-      """
-  }
-  allow = new customResources.Allow {
-    actions {
-      // list of allow policy actions
-    }
-    resource {
-      // list of resources to allow access to
-    }
-  }
-  managedPolicyArns {
-    // list of managed policy Arns
-  }
-}
-
-// create instances of the Custom Resource
-aResource = myCustomResource.instance(new Mapping {
-  ["AProperty"] = "something"
-})
-```
-
-Repo Example:
-```pkl
-import "@cfn-pkl-extras/customResources.pkl"
-import "@cfn-pkl-extras/route53.pkl"
-
-domainCustomResource = new customResources.CustomResource {
+local domainCustomResource = new customResources.CustomResource {
   resourceName = "Domain"
-  source = new customResources.Repo {
-    runtime = "python3.9"
-    handler = "index.handler"
-    timeout = 10.s
-    gitHubOrgRepo = "jamesward/cfn-domain-resource"
-    commit = "70e82a96b63a74bb302201e41365707beecaf0ae"
-  }
+  handler = "cfn_extras.domain.handler"
+  timeout = 600.s
   managedPolicyArns {
     "arn:aws:iam::aws:policy/AmazonRoute53DomainsFullAccess"
   }
 }
 
-// create instances of the Custom Resource
+// The Lambda and IAM role, then one CustomResource per instance
+domainResources = domainCustomResource.resources
 aDomain = domainCustomResource.instance(new Mapping {
   ["DomainName"] = "foo.com"
-  ["Contact"] = new route53.Contact {
-    // your contact properties
-  }
-  ["TransferAuthCode"] = "your_transfer_code"
-  ["NameServers"] = new {
-    // list of your name servers
-  }
   ["AutoRenew"] = true
+})
+```
+
+Example: call one AWS SDK method, like CDK's `AwsCustomResource`.
+```pkl
+import "@cfn-pkl-extras/customResources.pkl"
+
+local sdkCall = customResources.sdkCall(new Listing {
+  new customResources.Allow {
+    actions { "ssm:GetParameter" }
+    resource { "*" }
+  }
+})
+
+sdkResources = sdkCall.resources
+parameter = sdkCall.instance(new Mapping {
+  ["Service"] = "ssm"
+  ["Action"] = "get_parameter"
+  ["Parameters"] = new Mapping { ["Name"] = "/my/parameter" }
 })
 ```
 
