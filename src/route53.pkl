@@ -247,13 +247,14 @@ function stringChunk(s: String, length: Int): List<String> =
   stringChunkR(s, length, List())
 
 function domainRecordToResourceRecords(domainRecord: DomainRecord): Listing<String> =
-  domainRecord.values.toList().flatMap(
+  domainRecord.values.toList().map(
     (value: String) ->
-      // max length of record is 255
+      // a single TXT string can be at most 255 chars; long values become
+      // multiple quoted strings within ONE record (resolvers concatenate them)
       if (domainRecord.type == "TXT")
-        stringChunk(value, 255).map((s) -> "\"\(s)\"")
+        stringChunk(value, 255).map((s) -> "\"\(s)\"").join(" ")
       else
-        List(value)
+        value
   ).toListing()
 
 function domainRecords(apexDomain: ApexDomainName, records: Listing<DomainRecord>): Mapping<patterns.ResourceName, cloudformation.Resource> =

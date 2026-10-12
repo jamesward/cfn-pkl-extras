@@ -89,6 +89,16 @@ local externalStaticSiteDomainResources = new patterns.ExternalDomains {
   }
 }.resources
 
+local longTxtValue = "a".repeat(255) + "b".repeat(100)
+
+local txtResourceRecords = route53.domainRecordToResourceRecords(new route53.DomainRecord {
+  type = "TXT"
+  values {
+    longTxtValue
+    "short"
+  }
+})
+
 local staticSiteBuildSpec: String = staticSiteDomainResources["staticsitecomBuildProject"].Properties["Source"].BuildSpec
 
 facts {
@@ -137,6 +147,12 @@ facts {
     staticSiteDomainResources.containsKey("startstaticsitecomRecordSetCNAME")
     staticSiteDomainResources["startstaticsitecomRecordSetCNAME"].Properties["HostedZoneId"] == cloudformation.Ref("staticsitecomHostedZone")
     staticSiteDomainResources["startstaticsitecomDistributionFunction"].Properties["FunctionCode"].contains("https://example.net/start")
+  }
+
+  ["long TXT values are split into strings within a single record"] {
+    txtResourceRecords.length == 2
+    txtResourceRecords[0] == "\"\("a".repeat(255))\" \"\("b".repeat(100))\""
+    txtResourceRecords[1] == "\"short\""
   }
 
   ["static site deploy removes ignored files from the bucket"] {
