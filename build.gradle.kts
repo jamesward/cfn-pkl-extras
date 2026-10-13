@@ -1,5 +1,5 @@
 plugins {
-    id("com.skillsjars.gradle-plugin") version "0.1.4"
+    id("com.skillsjars.gradle-plugin") version "0.2.0"
     id("org.pkl-lang") version "0.32.1"
 }
 
@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    skill("com.jamesward:skills:0.0.11")
+    skill("com.jamesward:skills:0.0.13")
 }
 
 skillsjars {
