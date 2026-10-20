@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    skill("com.jamesward:skills:0.0.13")
+    skill("com.jamesward:skills:0.0.17")
 }
 
 skillsjars {
