@@ -57,6 +57,18 @@ class BasicRedirect {
   preserveMethods: Boolean = false
   /// Exact path mappings evaluated before the default destination.
   pathMappings: Listing<RedirectPathMapping>
+  /// Serve the content of `to` directly instead of returning a redirect.
+  /// CloudFront fetches from `to`'s host (HTTPS only) and rewrites the request
+  /// path to `to`'s path (with the request path appended when `preservePath`).
+  /// Only GET and HEAD are allowed. Useful for clients that will not follow a
+  /// redirect to a different origin. Logical resource IDs are unchanged, so an
+  /// existing redirect can be switched to a proxy in place.
+  proxy: Boolean(implies(proxyTarget != null && pathMappings.isEmpty && !preserveMethods)) = false
+  /// `to` split into host and path; null when `to` is not a plain https URL.
+  fixed proxyTarget: Pair<String, String>? =
+    let (m = Regex(#"https://([^/?#:]+)(/[^?#]*)?"#).matchEntire(to))
+      if (m == null) null
+      else Pair(m.groups[1]!!.value, m.groups[2]?.value ?? "/")
 }
 
 
@@ -426,6 +438,27 @@ class WebSiteRedirect {
 
   fixed redirector: String = if (usesLegacyRedirector) legacyRedirector else enhancedRedirector
 
+  /// Viewer-request function for `proxy`: rewrites the URI to the target path
+  /// and forwards the request to the proxy origin.
+  fixed proxyRewriter: String =
+    let (targetPath = redirect.proxyTarget?.second ?? "/")
+    new Listing<String> {
+      "function handler(event) {"
+      "  var request = event.request;"
+      when (redirect.preservePath) {
+        "  request.uri = '\(targetPath.replaceLast(Regex("/$"), ""))' + (request.uri || '/');"
+      }
+      when (!redirect.preservePath) {
+        "  request.uri = '\(targetPath)';"
+      }
+      "  return request;"
+      "}"
+    }.join("\n")
+
+  fixed functionCode: String = if (redirect.proxy) proxyRewriter else redirector
+
+  fixed originId: String = if (redirect.proxy) "proxy-origin" else "dummy-origin"
+
   fixed resources: Mapping<ResourceName, cloudformation.Resource> = new {
     when (createHostedZone) {
       ...route53.hostedZone(domainName)
@@ -473,9 +506,9 @@ class WebSiteRedirect {
     ["\(resourceName)DistributionFunction"] = new cloudfrontFunction.Function {
       Name = "\(resourceName)Redirect"
       AutoPublish = true
-      FunctionCode = redirector
+      FunctionCode = functionCode
       FunctionConfig {
-        Comment = "Redirect-All"
+        Comment = if (redirect.proxy) "Proxy-All" else "Redirect-All"
         Runtime = "cloudfront-js-1.0"
       }
     }
@@ -485,7 +518,7 @@ class WebSiteRedirect {
         Enabled = true
         DefaultCacheBehavior {
           ViewerProtocolPolicy = "redirect-to-https"
-          TargetOriginId = "dummy-origin"
+          TargetOriginId = originId
           FunctionAssociations {
             new {
               EventType = "viewer-request"
@@ -493,22 +526,33 @@ class WebSiteRedirect {
             }
           }
           ForwardedValues {
-            QueryString = false
+            // A proxy passes the query string to the origin (and keys the cache
+            // on it) only when asked to; the redirect function reads it itself.
+            QueryString = redirect.proxy && redirect.preserveQuery
           }
-          AllowedMethods {
-            "HEAD"
-            "DELETE"
-            "POST"
-            "GET"
-            "OPTIONS"
-            "PUT"
-            "PATCH"
+          when (redirect.proxy) {
+            AllowedMethods {
+              "HEAD"
+              "GET"
+            }
+          }
+          when (!redirect.proxy) {
+            AllowedMethods {
+              "HEAD"
+              "DELETE"
+              "POST"
+              "GET"
+              "OPTIONS"
+              "PUT"
+              "PATCH"
+            }
           }
         }
         Origins {
           new {
-            Id = "dummy-origin"
-            DomainName = domainName.name
+            Id = originId
+            // Redirects never reach the origin; a proxy fetches from `to`'s host.
+            DomainName = if (redirect.proxy) redirect.proxyTarget!!.first else domainName.name
             CustomOriginConfig {
               OriginProtocolPolicy = "https-only"
             }

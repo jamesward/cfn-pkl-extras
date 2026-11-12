@@ -13,7 +13,7 @@ amends "pkl:Project"
 
 dependencies {
   ["cfn-pkl-extras"] {
-    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.2.7"
+    uri = "package://pkg.pkl-lang.org/github.com/jamesward/cfn-pkl-extras/cfn-pkl-extras@0.2.8"
   }
 }
 ```
@@ -123,6 +123,20 @@ registeredDomains {
 ```
 
 POST uses 307/308 as before. Set `preserveMethods = true` to use 307/308 for every non-GET/HEAD method, preserving request methods and bodies.
+
+### Proxying Instead of Redirecting
+
+Some clients (for example AI agents) refuse to follow a redirect to a different origin. Set `proxy = true` to have CloudFront fetch `to` and serve its content directly from your hostname, with no redirect. `to` must be an `https://` URL; only GET and HEAD are allowed, and `pathMappings`/`preserveMethods` are not supported. With `preservePath = true` the request path is appended to `to`'s path. Logical resource IDs match a plain redirect, so an existing redirect switches to a proxy in place.
+
+```pkl
+redirects {
+  new patterns.BasicRedirect {
+    sub = "start"
+    to = "https://raw.githubusercontent.com/org/repo/refs/heads/main/README.md"
+    proxy = true
+  }
+}
+```
 
 ## Lower-Level Abstractions
 

@@ -89,6 +89,31 @@ local externalStaticSiteDomainResources = new patterns.ExternalDomains {
   }
 }.resources
 
+local proxyDomainResources = new patterns.Domains {
+  contact = testContact
+  domains {
+    ["proxy.com"] {
+      redirects {
+        new patterns.BasicRedirect {
+          sub = "start"
+          to = "https://raw.example.net/org/repo/main/README.md"
+          proxy = true
+        }
+        new patterns.BasicRedirect {
+          sub = "files"
+          to = "https://raw.example.net/org/repo/main/"
+          proxy = true
+          preservePath = true
+        }
+      }
+    }
+  }
+}.resources
+
+local proxyFunctionCode: String = proxyDomainResources["startproxycomDistributionFunction"].Properties["FunctionCode"]
+local proxyPathFunctionCode: String = proxyDomainResources["filesproxycomDistributionFunction"].Properties["FunctionCode"]
+local proxyDistributionConfig = proxyDomainResources["startproxycomDistribution"].Properties["DistributionConfig"]
+
 local longTxtValue = "a".repeat(255) + "b".repeat(100)
 
 local txtResourceRecords = route53.domainRecordToResourceRecords(new route53.DomainRecord {
@@ -171,5 +196,23 @@ facts {
     externalStaticSiteDomainResources.containsKey("startexternalstaticsitecomRecordSetCNAME")
     externalStaticSiteDomainResources["startexternalstaticsitecomRecordSetCNAME"].Properties["HostedZoneId"] == cloudformation.Ref("externalstaticsitecomHostedZone")
     externalStaticSiteDomainResources["startexternalstaticsitecomDistributionFunction"].Properties["FunctionCode"].contains("https://example.net/external-start")
+  }
+
+  ["proxy rewrites to the target and keeps redirect logical IDs"] {
+    proxyDomainResources.containsKey("startproxycomCertificate")
+    proxyDomainResources.containsKey("startproxycomRecordSetCNAME")
+    proxyFunctionCode.contains("request.uri = '/org/repo/main/README.md';")
+    proxyFunctionCode.contains("return request;")
+    !proxyFunctionCode.contains("location")
+    proxyPathFunctionCode.contains("request.uri = '/org/repo/main' + (request.uri || '/');")
+    proxyDistributionConfig.Origins[0].DomainName == "raw.example.net"
+    proxyDistributionConfig.Origins[0].Id == "proxy-origin"
+    proxyDistributionConfig.DefaultCacheBehavior.TargetOriginId == "proxy-origin"
+    proxyDistributionConfig.DefaultCacheBehavior.AllowedMethods.toList() == List("HEAD", "GET")
+    proxyDistributionConfig.DefaultCacheBehavior.ForwardedValues.QueryString == false
+  }
+
+  ["proxy rejects non-https targets"] {
+    module.catchOrNull(() -> new patterns.BasicRedirect { to = "http://example.net/x"; proxy = true }.proxy) != null
   }
 }
