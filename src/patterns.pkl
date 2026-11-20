@@ -736,6 +736,12 @@ class StaticSite {
   // in the repo adds `--exclude` patterns to the sync. `aws s3 sync --delete`
   // never deletes excluded keys, so a second step removes any object matching an
   // excluded pattern (for example files published before they were ignored).
+  // `aws s3 sync` types `.txt` and `.md` files without a charset, so a client
+  // reading the header (a browser, Python's requests) decodes UTF-8 text such as
+  // llms.txt as Latin-1. After the sync, the same files are uploaded again with
+  // an explicit `charset=utf-8`; `.slugignore` excludes still apply.
+  fixed textTypes: List<String> = List("txt=text/plain", "md=text/markdown")
+
   fixed buildSpec: String = new Listing {
     "version: 0.2"
     "phases:"
@@ -748,7 +754,7 @@ class StaticSite {
     }
     "  post_build:"
     "    commands:"
-    "      - EXCLUDES=\"--exclude '.git/*' --exclude '.slugignore'\"; INCLUDES=\"--include '.git/*' --include '.slugignore'\"; if [ -f .slugignore ]; then while IFS= read -r p || [ -n \"$p\" ]; do case \"$p\" in ''|'#'*) ;; *) EXCLUDES=\"$EXCLUDES --exclude '$p'\"; INCLUDES=\"$INCLUDES --include '$p'\";; esac; done < .slugignore; fi; eval aws s3 sync \(build.publishDir)/ \"s3://${BUCKET}/\" --delete $EXCLUDES && eval aws s3 rm \"s3://${BUCKET}/\" --recursive --exclude \"'*'\" $INCLUDES"
+    "      - EXCLUDES=\"--exclude '.git/*' --exclude '.slugignore'\"; INCLUDES=\"--include '.git/*' --include '.slugignore'\"; if [ -f .slugignore ]; then while IFS= read -r p || [ -n \"$p\" ]; do case \"$p\" in ''|'#'*) ;; *) EXCLUDES=\"$EXCLUDES --exclude '$p'\"; INCLUDES=\"$INCLUDES --include '$p'\";; esac; done < .slugignore; fi; eval aws s3 sync \(build.publishDir)/ \"s3://${BUCKET}/\" --delete $EXCLUDES && eval aws s3 rm \"s3://${BUCKET}/\" --recursive --exclude \"'*'\" $INCLUDES && for t in \(textTypes.join(" ")); do eval aws s3 cp \(build.publishDir)/ \"s3://${BUCKET}/\" --recursive --exclude \"'*'\" --include \"'*.${t%%=*}'\" $EXCLUDES --content-type \"'${t#*=}; charset=utf-8'\" || exit 1; done"
     "      - aws cloudfront create-invalidation --distribution-id \"${DISTRIBUTION_ID}\" --paths '/*'"
   }.join("\n")
 

@@ -186,6 +186,10 @@ facts {
     staticSiteBuildSpec.contains("INCLUDES=\"$INCLUDES --include '$p'\"")
     staticSiteBuildSpec.contains("read -r p || [ -n \"$p\" ]")
   }
+  ["static site deploy serves text files as UTF-8"] {
+    staticSiteBuildSpec.contains("for t in txt=text/plain md=text/markdown; do")
+    staticSiteBuildSpec.contains("--include \"'*.${t%%=*}'\" $EXCLUDES --content-type \"'${t#*=}; charset=utf-8'\" || exit 1; done")
+  }
   ["external static site and redirect resources coexist"] {
     externalStaticSiteDomainResources.containsKey("externalstaticsitecomBucket")
     externalStaticSiteDomainResources.containsKey("externalstaticsitecomDistribution")
