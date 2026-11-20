@@ -42,10 +42,6 @@ tasks.register("clean") {
 }
 
 // Agent Skills, extracted with ./gradlew extractSkillsJars
-repositories {
-    mavenCentral()
-}
-
 dependencies {
     skill("com.jamesward:skills:0.0.27")
 }
