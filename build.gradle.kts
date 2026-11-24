@@ -1,6 +1,6 @@
 plugins {
     id("com.skillsjars.gradle-plugin") version "0.2.0"
-    id("org.pkl-lang") version "0.33.0"
+    id("org.pkl-lang") version "0.33.1"
 }
 
 pkl {
